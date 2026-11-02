@@ -69,8 +69,19 @@ data class GameProfileEntity(@PrimaryKey val packageName: String, val json: Stri
 @Entity(tableName = "reminders")
 data class ReminderEntity(@PrimaryKey val id: String, val text: String, val triggerAt: Long)
 
+/** One row per conversation for the Chats list. */
+data class ConversationSummary(val conversationId: String, val lastAt: Long, val count: Int, val title: String?)
+
 @Dao
 interface MessageDao {
+    @Query(
+        "SELECT conversationId, MAX(createdAt) AS lastAt, COUNT(*) AS count, " +
+            "(SELECT m2.text FROM messages AS m2 WHERE m2.conversationId = messages.conversationId AND m2.role = 'user' ORDER BY m2.id ASC LIMIT 1) AS title " +
+            "FROM messages GROUP BY conversationId ORDER BY lastAt DESC"
+    )
+    fun conversations(): Flow<List<ConversationSummary>>
+    @Query("SELECT conversationId FROM messages ORDER BY id DESC LIMIT 1")
+    suspend fun latestConversationId(): String?
     @Query("SELECT * FROM messages WHERE conversationId = :cid ORDER BY id ASC")
     fun observe(cid: String): Flow<List<MessageEntity>>
     @Query("SELECT * FROM messages WHERE conversationId = :cid ORDER BY id DESC LIMIT :limit")

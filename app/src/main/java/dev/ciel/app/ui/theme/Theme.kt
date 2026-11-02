@@ -1,56 +1,87 @@
 package dev.ciel.app.ui.theme
 
+import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Typography
 import androidx.compose.material3.darkColorScheme
+import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.ReadOnlyComposable
+import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.sp
+import dev.ciel.app.design.AnimationLevel
+import dev.ciel.app.design.Appearance
+import dev.ciel.app.design.CielDesign
+import dev.ciel.app.design.DesignPalette
 import dev.ciel.app.overlay.StateColors
 import dev.ciel.engine.CielState
 
-object CielColors {
-    val Void = Color(0xFF050B18)
-    val Deep = Color(0xFF0A1830)
-    val Panel = Color(0xCC0C1E3A)
-    val PanelBorder = Color(0x995CE1FF)
-    val Cyan = Color(0xFF5CE1FF)
-    val Ice = Color(0xFFBDF4FF)
-    val Text = Color(0xFFDDF6FF)
-    val Muted = Color(0xFF8FB4C8)
-    val Danger = Color(0xFFE0304A)
-    val Amber = Color(0xFFFFC45C)
-    val Green = Color(0xFF6EF0AA)
+/** The active design, its palette and animation level, available anywhere in the UI tree. */
+data class CielLook(val design: CielDesign, val palette: DesignPalette, val animation: AnimationLevel)
 
-    fun forState(s: CielState) = Color(StateColors.of(s))
+val LocalLook = staticCompositionLocalOf { CielLook(CielDesign.HYBRID, DesignPalette.of(CielDesign.HYBRID), AnimationLevel.FULL) }
+
+/**
+ * Colour accessors used throughout the UI. They read the active design, so every screen follows
+ * the user's chosen design without each screen knowing about designs.
+ */
+object CielColors {
+    private val p: DesignPalette @Composable @ReadOnlyComposable get() = LocalLook.current.palette
+    val Void: Color @Composable @ReadOnlyComposable get() = Color(p.background)
+    val Deep: Color @Composable @ReadOnlyComposable get() = Color(p.surface)
+    val Panel: Color @Composable @ReadOnlyComposable get() = Color(p.panel)
+    val PanelBorder: Color @Composable @ReadOnlyComposable get() = Color(p.border)
+    val Cyan: Color @Composable @ReadOnlyComposable get() = Color(p.accent)
+    val Ice: Color @Composable @ReadOnlyComposable get() = Color(p.accent2)
+    val Text: Color @Composable @ReadOnlyComposable get() = Color(p.text)
+    val Muted: Color @Composable @ReadOnlyComposable get() = Color(p.muted)
+    val Danger: Color @Composable @ReadOnlyComposable get() = Color(p.danger)
+    val Amber: Color @Composable @ReadOnlyComposable get() = Color(p.warning)
+    val Green: Color @Composable @ReadOnlyComposable get() = Color(p.success)
+
+    @Composable @ReadOnlyComposable
+    fun forState(s: CielState): Color = if (s == CielState.IDLE) Color(p.accent) else Color(StateColors.of(s))
 }
 
-private val scheme = darkColorScheme(
-    primary = CielColors.Cyan,
-    onPrimary = CielColors.Void,
-    secondary = CielColors.Ice,
-    background = CielColors.Void,
-    onBackground = CielColors.Text,
-    surface = CielColors.Deep,
-    onSurface = CielColors.Text,
-    surfaceVariant = Color(0xFF10233F),
-    onSurfaceVariant = CielColors.Muted,
-    error = CielColors.Danger,
-    outline = CielColors.PanelBorder,
-)
-
-private val typography = Typography(
-    titleLarge = TextStyle(fontWeight = FontWeight.Light, fontSize = 22.sp, letterSpacing = 2.sp),
-    titleMedium = TextStyle(fontWeight = FontWeight.Medium, fontSize = 16.sp, letterSpacing = 0.5.sp),
-    bodyLarge = TextStyle(fontSize = 16.sp, lineHeight = 23.sp),
-    bodyMedium = TextStyle(fontSize = 14.sp, lineHeight = 20.sp),
-    labelSmall = TextStyle(fontFamily = FontFamily.Monospace, fontSize = 11.sp, letterSpacing = 1.sp),
-)
+private fun typographyFor(design: CielDesign): Typography {
+    val mono = design == CielDesign.RAPHAEL
+    val light = design == CielDesign.GREAT_SAGE
+    return Typography(
+        titleLarge = TextStyle(fontWeight = if (light) FontWeight.ExtraLight else FontWeight.Light, fontSize = 22.sp, letterSpacing = 2.sp,
+            fontFamily = if (mono) FontFamily.Monospace else FontFamily.Default),
+        titleMedium = TextStyle(fontWeight = FontWeight.Medium, fontSize = 16.sp, letterSpacing = 0.5.sp,
+            fontFamily = if (mono) FontFamily.Monospace else FontFamily.Default),
+        bodyLarge = TextStyle(fontSize = if (light) 18.sp else 16.sp, lineHeight = if (light) 27.sp else 23.sp,
+            fontWeight = if (light) FontWeight.Light else FontWeight.Normal),
+        bodyMedium = TextStyle(fontSize = 14.sp, lineHeight = 20.sp),
+        labelSmall = TextStyle(fontFamily = FontFamily.Monospace, fontSize = 11.sp, letterSpacing = 1.sp),
+    )
+}
 
 @Composable
-fun CielTheme(content: @Composable () -> Unit) {
-    MaterialTheme(colorScheme = scheme, typography = typography, content = content)
+fun CielTheme(appearance: Appearance, content: @Composable () -> Unit) {
+    val palette = DesignPalette.resolve(appearance, isSystemInDarkTheme())
+    CielTheme(CielLook(appearance.design, palette, appearance.animation), content)
+}
+
+@Composable
+fun CielTheme(look: CielLook, content: @Composable () -> Unit) {
+    val p = look.palette
+    val scheme = if (p.isLight) lightColorScheme(
+        primary = Color(p.accent), onPrimary = Color.White, secondary = Color(p.accent2),
+        background = Color(p.background), onBackground = Color(p.text), surface = Color(p.surface), onSurface = Color(p.text),
+        surfaceVariant = Color(p.surface), onSurfaceVariant = Color(p.muted), error = Color(p.danger), outline = Color(p.border),
+    ) else darkColorScheme(
+        primary = Color(p.accent), onPrimary = Color(p.background), secondary = Color(p.accent2),
+        background = Color(p.background), onBackground = Color(p.text), surface = Color(p.surface), onSurface = Color(p.text),
+        surfaceVariant = Color(p.surface), onSurfaceVariant = Color(p.muted), error = Color(p.danger), outline = Color(p.border),
+    )
+    CompositionLocalProvider(LocalLook provides look) {
+        MaterialTheme(colorScheme = scheme, typography = typographyFor(look.design), content = content)
+    }
 }

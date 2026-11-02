@@ -53,7 +53,7 @@ import dev.ciel.research.SearchProviderKind
 import kotlinx.coroutines.launch
 
 @Composable
-fun SettingsScreen(nav: NavHostController) {
+fun PreferencesScreen(nav: NavHostController) {
     val graph = CielApplication.graph
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
@@ -63,10 +63,6 @@ fun SettingsScreen(nav: NavHostController) {
     fun update(t: (dev.ciel.app.data.AppSettings) -> dev.ciel.app.data.AppSettings) { scope.launch { graph.settings.update(t) } }
 
     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(12.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-        CielPanel(title = "Quick access") {
-            Row { TextButton(onClick = { nav.go("providers") }) { Text("AI providers") }; TextButton(onClick = { nav.go("permissions") }) { Text("Permissions") }; TextButton(onClick = { nav.go("memory") }) { Text("Memory") } }
-            Row { TextButton(onClick = { nav.go("skills") }) { Text("Skills") }; TextButton(onClick = { nav.go("games") }) { Text("Games") } }
-        }
 
         CielPanel(title = "Personality") {
             var address by remember(s.engine.persona.formOfAddress) { mutableStateOf(s.engine.persona.formOfAddress) }
@@ -103,35 +99,10 @@ fun SettingsScreen(nav: NavHostController) {
             Toggle("Continuous conversation (listen again after replying)", s.voice.continuousConversation) { v -> update { it.copy(voice = it.voice.copy(continuousConversation = v)) } }
         }
 
-        CielPanel(title = "Activation") {
-            Text("Most reliable: make Ciel your default digital assistant, then use your phone's assistant gesture (long-press power/home or corner swipe). " +
-                "Also available: the \"Ask Ciel\" Quick Settings tile and Floating Ciel.", color = CielColors.Muted)
-            OutlinedButton(onClick = { context.startActivity(Intent(Settings.ACTION_MANAGE_DEFAULT_APPS_SETTINGS)) }) { Text("Set default assistant") }
-            Text("Wake word \"Ciel\" (experimental): $wakeStatus", color = CielColors.Text)
-            Text("Runs offline on this phone, shows a permanent notification, uses extra battery, and must be switched on from inside the app after each reboot (Android 14 rule).", color = CielColors.Muted, style = MaterialTheme.typography.labelSmall)
-            var progress by remember { mutableStateOf<Float?>(null) }
-            var error by remember { mutableStateOf<String?>(null) }
-            if (!VoskModels.isInstalled(context) || progress != null) {
-                OutlinedButton(enabled = progress == null, onClick = {
-                    progress = 0f; error = null
-                    scope.launch {
-                        try { VoskModels.download(context) { p -> progress = p } ; tick++ } catch (e: Exception) { error = e.message }
-                        progress = null
-                    }
-                }) { Text("Download wake-word model (~40 MB from alphacephei.com)") }
-                progress?.let { p -> LinearProgressIndicator(progress = { p }, modifier = Modifier.fillMaxWidth()) }
-                error?.let { Text(it, color = CielColors.Danger) }
-            } else {
-                Toggle("Listen for \"Ciel\"", s.wakeWordEnabled) { v ->
-                    update { it.copy(wakeWordEnabled = v) }
-                    if (v) {
-                        if (graph.capabilities.has(Manifest.permission.RECORD_AUDIO)) WakeWordService.start(context) else (context as? dev.ciel.app.ui.MainActivity)?.listen()
-                    } else WakeWordService.stop(context)
-                }
-                var phrases by remember(s.wakePhrases) { mutableStateOf(s.wakePhrases.joinToString(", ")) }
-                OutlinedTextField(phrases, { phrases = it }, label = { Text("Accepted spellings (comma-separated)") }, singleLine = true, modifier = Modifier.fillMaxWidth())
-                TextButton(onClick = { update { it.copy(wakePhrases = phrases.split(',').map { p -> p.trim().lowercase() }.filter { p -> p.isNotEmpty() }) } }) { Text("Save (restart listening to apply)") }
-            }
+        dev.ciel.app.ui.components.HeyCielCard()
+
+        CielPanel(title = "Other ways to summon Ciel") {
+            Text("The assistant gesture (when Ciel is the default assistant), the \"Ask Ciel\" Quick Settings tile, and Floating Ciel.", color = CielColors.Muted)
             Toggle("Floating Ciel over other apps", s.floatingEnabled) { v ->
                 if (v && !Settings.canDrawOverlays(context)) {
                     context.startActivity(Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION, Uri.parse("package:${context.packageName}")))
@@ -180,7 +151,6 @@ fun SettingsScreen(nav: NavHostController) {
         CielPanel(title = "Automation & interface") {
             Toggle("Send screenshots to vision models during automation", s.allowScreenshots) { v -> update { it.copy(allowScreenshots = v) } }
             Text("Off: only the on-screen text/element list is sent. Games usually need screenshots.", color = CielColors.Muted, style = MaterialTheme.typography.labelSmall)
-            Toggle("Reduce motion (saves battery)", s.reducedMotion) { v -> update { it.copy(reducedMotion = v) } }
             OutlinedButton(onClick = { context.startActivity(Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS)) }) { Text("Battery optimisation settings") }
         }
 

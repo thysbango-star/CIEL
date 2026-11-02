@@ -34,6 +34,12 @@ data class VoiceSettings(
     val continuousConversation: Boolean = false,
 )
 
+/**
+ * "Hey Ciel" and "Ciel". The offline English model has no word "ciel", so the closest-sounding
+ * vocabulary ("seal") is accepted too.
+ */
+val DEFAULT_WAKE_PHRASES = listOf("hey ciel", "ciel", "hey seal", "seal", "hey see el")
+
 data class AppSettings(
     val providers: List<ProviderConfig> = emptyList(),
     val engine: EngineSettings = EngineSettings(),
@@ -42,12 +48,17 @@ data class AppSettings(
     val searchKind: SearchProviderKind? = null,
     val searchBaseUrl: String? = null,
     val wakeWordEnabled: Boolean = false,
-    val wakePhrases: List<String> = listOf("ciel", "seal"),
+    val wakePhrases: List<String> = DEFAULT_WAKE_PHRASES,
     val floatingEnabled: Boolean = false,
     /** Lets autonomous automation send screenshots to a vision model (in addition to the element tree). */
     val allowScreenshots: Boolean = false,
     val reducedMotion: Boolean = false,
     val discordWebhooks: List<String> = emptyList(),
+    val appearance: dev.ciel.app.design.Appearance = dev.ciel.app.design.Appearance(),
+    /** First-run setup (design → connect → Hey Ciel) completed or skipped. */
+    val onboardingDone: Boolean = false,
+    /** Shows URLs/models/headers editing for providers. Off for normal use. */
+    val developerMode: Boolean = false,
 )
 
 private val Context.dataStore by preferencesDataStore("ciel_settings")
@@ -105,6 +116,14 @@ class SettingsStore(private val context: Context, scope: CoroutineScope) {
             "allowScreenshots" to s.allowScreenshots
             "reducedMotion" to s.reducedMotion
             "discordWebhooks" to s.discordWebhooks
+            "appearance" to json {
+                "design" to s.appearance.design.name
+                opt("accent", s.appearance.accent?.name)
+                "animation" to s.appearance.animation.name
+                "themeMode" to s.appearance.themeMode.name
+            }
+            "onboardingDone" to s.onboardingDone
+            "developerMode" to s.developerMode
         }.toString()
 
         fun decode(text: String): AppSettings {
@@ -145,11 +164,22 @@ class SettingsStore(private val context: Context, scope: CoroutineScope) {
                 searchKind = o["searchKind"]?.string?.let { runCatching { SearchProviderKind.valueOf(it) }.getOrNull() },
                 searchBaseUrl = o["searchBaseUrl"]?.string,
                 wakeWordEnabled = o["wakeWordEnabled"]?.bool ?: false,
-                wakePhrases = o["wakePhrases"]?.array?.mapNotNull { it.string }?.ifEmpty { null } ?: d.wakePhrases,
+                wakePhrases = o["wakePhrases"]?.array?.mapNotNull { it.string }?.ifEmpty { null }?.takeIf { it != listOf("ciel", "seal") } ?: d.wakePhrases,
                 floatingEnabled = o["floatingEnabled"]?.bool ?: false,
                 allowScreenshots = o["allowScreenshots"]?.bool ?: false,
                 reducedMotion = o["reducedMotion"]?.bool ?: false,
                 discordWebhooks = o["discordWebhooks"]?.array?.mapNotNull { it.string } ?: emptyList(),
+                appearance = o["appearance"]?.let { a ->
+                    dev.ciel.app.design.Appearance(
+                        design = runCatching { dev.ciel.app.design.CielDesign.valueOf(a["design"]?.string ?: "") }.getOrDefault(dev.ciel.app.design.CielDesign.HYBRID),
+                        accent = a["accent"]?.string?.let { n -> runCatching { dev.ciel.app.design.AccentColor.valueOf(n) }.getOrNull() },
+                        animation = runCatching { dev.ciel.app.design.AnimationLevel.valueOf(a["animation"]?.string ?: "") }.getOrDefault(dev.ciel.app.design.AnimationLevel.FULL),
+                        themeMode = runCatching { dev.ciel.app.design.ThemeMode.valueOf(a["themeMode"]?.string ?: "") }.getOrDefault(dev.ciel.app.design.ThemeMode.SYSTEM),
+                    )
+                } ?: dev.ciel.app.design.Appearance(),
+                // Existing installs with a provider already configured skip the first-run flow.
+                onboardingDone = o["onboardingDone"]?.bool ?: (o["providers"]?.array?.isNotEmpty() == true),
+                developerMode = o["developerMode"]?.bool ?: false,
             )
         }
 

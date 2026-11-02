@@ -11,7 +11,6 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.lifecycleScope
 import dev.ciel.app.CielApplication
-import dev.ciel.app.ui.theme.CielTheme
 import kotlinx.coroutines.launch
 
 class MainActivity : ComponentActivity() {
@@ -25,7 +24,7 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
-        setContent { CielTheme { CielApp(onListen = ::listen) } }
+        setContent { CielApp(onListen = ::listen) }
         handle(intent)
     }
 

@@ -25,6 +25,7 @@ import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
@@ -82,8 +83,27 @@ data class ToolActivity(val tool: String, val skill: String, val done: Boolean, 
  * full-screen and floating interfaces, and speaks replies.
  */
 class ConversationController(private val graph: AppGraph) {
-    val conversationId = "main"
-    val messages: Flow<List<MessageEntity>> = graph.db.messages().observe(conversationId)
+    private val _conversationId = MutableStateFlow("main")
+    /** The conversation currently shown on Home. */
+    val currentConversation: StateFlow<String> = _conversationId.asStateFlow()
+    val conversationId: String get() = _conversationId.value
+    @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
+    val messages: Flow<List<MessageEntity>> = _conversationId.flatMapLatest { graph.db.messages().observe(it) }
+    val conversations = graph.db.messages().conversations()
+
+    /** Starts a fresh conversation (history is kept in Chats). */
+    fun newConversation() {
+        cancel()
+        _conversationId.value = "c-" + System.currentTimeMillis()
+        _lastReply.value = null
+    }
+
+    fun open(id: String) { cancel(); _conversationId.value = id; _lastReply.value = null }
+
+    suspend fun delete(id: String) {
+        graph.db.messages().clear(id)
+        if (id == conversationId) newConversation()
+    }
 
     private val _state = MutableStateFlow(CielState.IDLE)
     val state: StateFlow<CielState> = _state.asStateFlow()
@@ -101,6 +121,8 @@ class ConversationController(private val graph: AppGraph) {
     private var job: Job? = null
 
     init {
+        // Resume the most recent conversation after a restart.
+        graph.appScope.launch { graph.db.messages().latestConversationId()?.let { if (_conversationId.value == "main") _conversationId.value = it } }
         graph.emergencyStop.addListener { job?.cancel(); _state.value = CielState.WARNING; _stateLabel.value = "Stopped" }
         graph.appScope.launch(Dispatchers.Main) {
             graph.voice.speaking.collect { speaking ->
@@ -119,12 +141,13 @@ class ConversationController(private val graph: AppGraph) {
         if (text.isBlank()) return
         job?.cancel()
         graph.voice.stop()
+        val cid = conversationId // a reply always lands in the conversation it was asked in
         job = graph.appScope.launch {
             val dao = graph.db.messages()
-            val history = dao.recent(conversationId, 40).reversed().map {
+            val history = dao.recent(cid, 40).reversed().map {
                 ChatMessage(if (it.role == "user") Role.USER else Role.ASSISTANT, it.text)
             }
-            dao.insert(MessageEntity(conversationId = conversationId, role = "user", text = text + if (images.isNotEmpty()) " [image]" else ""))
+            dao.insert(MessageEntity(conversationId = cid, role = "user", text = text + if (images.isNotEmpty()) " [image]" else ""))
             _streaming.value = ""; _activity.value = emptyList(); _state.value = CielState.PROCESSING
             var finalText: String? = null
             var offline = false
@@ -143,7 +166,7 @@ class ConversationController(private val graph: AppGraph) {
                 }
             }
             val reply = finalText ?: run { onFinished?.invoke(); return@launch }
-            dao.insert(MessageEntity(conversationId = conversationId, role = "ciel", text = reply, providerName = _provider.value, offline = offline))
+            dao.insert(MessageEntity(conversationId = cid, role = "ciel", text = reply, providerName = _provider.value, offline = offline))
             _streaming.value = ""
             _lastReply.value = reply
             if (speak) {
@@ -157,34 +180,71 @@ class ConversationController(private val graph: AppGraph) {
 
     fun cancel() { job?.cancel(); _streaming.value = ""; _state.value = CielState.IDLE }
 
-    suspend fun clear() = graph.db.messages().clear(conversationId)
+    suspend fun clear() = graph.db.messages().clearAll()
 }
 
 /**
- * Voice flow shared by the in-app mic, the assistant gesture, the quick-settings tile and the
- * wake word: listen → recognise → respond → speak → (optionally) listen again.
+ * Voice flow shared by the in-app mic, the assistant gesture, the quick-settings tile and
+ * "Hey Ciel": listen → recognise → respond → speak → (optionally) listen again.
  */
 class VoiceCoordinator(private val graph: AppGraph) {
-    fun listen(continuous: Boolean = graph.settings.current.voice.continuousConversation, done: (() -> Unit)? = null) {
+    /**
+     * [offlineFallback] is used after the wake word: if Android's recogniser refuses to work while
+     * another app is open, the wake-word service transcribes the command offline instead.
+     */
+    fun listen(
+        continuous: Boolean = graph.settings.current.voice.continuousConversation,
+        offlineFallback: Boolean = false,
+        done: (() -> Unit)? = null,
+    ) {
         graph.appScope.launch(Dispatchers.Main) {
             graph.voice.stop()
             graph.conversation.setListening(true)
-            graph.speech.start(
-                preferOffline = !graph.network.online.value,
-                onEnd = { graph.conversation.setListening(false); done?.invoke() },
-            ) { text ->
+            val handle: (String) -> Unit = { text ->
                 graph.conversation.setListening(false)
                 graph.conversation.send(text, speak = graph.settings.current.voice.speakResponses) {
-                    if (continuous && !dev.ciel.engine.LocalIntentParser.isStopCommand(text)) listen(true, done) else done?.invoke()
+                    if (continuous && !dev.ciel.engine.LocalIntentParser.isStopCommand(text)) listen(true, offlineFallback, done) else done?.invoke()
                 }
             }
+            graph.speech.start(
+                preferOffline = !graph.network.online.value,
+                onEnd = {
+                    val failed = graph.speech.state.value is dev.ciel.app.voice.ListenState.Error
+                    val wake = dev.ciel.app.voice.WakeWordService.instance
+                    if (failed && offlineFallback && wake != null) {
+                        graph.conversation.setListening(true)
+                        wake.dictate { text ->
+                            graph.conversation.setListening(false)
+                            if (text != null) handle(text) else done?.invoke()
+                        }
+                    } else {
+                        graph.conversation.setListening(false)
+                        done?.invoke()
+                    }
+                },
+                onFinal = handle,
+            )
         }
     }
 
     /** Called by the wake-word service after it released the microphone; [resume] restarts it. */
     fun onWakeWord(resume: () -> Unit) {
         graph.appScope.launch(Dispatchers.Main) {
-            graph.voice.speak("Yes?") { listen(continuous = false) { resume() } }
+            dev.ciel.app.overlay.VoiceOverlay.show(graph.context)
+            chime()
+            kotlinx.coroutines.delay(250) // so the chime isn't captured as the start of the command
+            listen(continuous = graph.settings.current.voice.continuousConversation, offlineFallback = true) {
+                graph.appScope.launch(Dispatchers.Main) { dev.ciel.app.overlay.VoiceOverlay.hideSoon() }
+                resume()
+            }
+        }
+    }
+
+    private fun chime() {
+        runCatching {
+            val tone = android.media.ToneGenerator(android.media.AudioManager.STREAM_NOTIFICATION, 70)
+            tone.startTone(android.media.ToneGenerator.TONE_PROP_ACK, 150)
+            android.os.Handler(android.os.Looper.getMainLooper()).postDelayed({ tone.release() }, 400)
         }
     }
 }

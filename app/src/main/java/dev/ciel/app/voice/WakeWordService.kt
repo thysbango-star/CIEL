@@ -49,12 +49,14 @@ class WakeWordService : Service() {
 
     override fun onBind(intent: Intent?): IBinder? = null
 
+    override fun onCreate() { super.onCreate(); instance = this }
+
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         if (intent?.action == ACTION_STOP) { stopSelf(); return START_NOT_STICKY }
         Notifications.ensureChannels(this)
         val type = if (Build.VERSION.SDK_INT >= 30) ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE else 0
         try {
-            ServiceCompat.startForeground(this, NOTIF_ID, notification("Listening for \"Ciel\""), type)
+            ServiceCompat.startForeground(this, NOTIF_ID, notification("Listening for \"Hey Ciel\""), type)
         } catch (e: Exception) {
             _status.value = "Android blocked background listening: open Ciel and enable it again."
             stopSelf(); return START_NOT_STICKY
@@ -111,12 +113,13 @@ class WakeWordService : Service() {
     }
 
     private fun handle(hypothesis: String?, phrases: List<String>) {
-        val text = Json.parseOrNull(hypothesis ?: return)?.get("text")?.string?.trim()?.lowercase() ?: return
-        if (text.isEmpty() || text == "[unk]") return
+        val raw = Json.parseOrNull(hypothesis ?: return)?.get("text")?.string?.trim()?.lowercase() ?: return
+        val text = raw.split(" ").filter { it.isNotBlank() && it != "[unk]" }.joinToString(" ")
+        if (text.isEmpty()) return
         val graph = CielApplication.graph
         when {
-            phrases.any { text == "$it stop" } -> graph.emergencyStop.trigger("voice: Ciel, stop")
-            phrases.any { text == it } -> {
+            phrases.any { text == "$it stop" || text.startsWith("$it stop ") } -> graph.emergencyStop.trigger("voice: Ciel, stop")
+            phrases.any { text == it || text.startsWith("$it ") } -> {
                 // Hand the microphone to the command recogniser, then take it back.
                 releaseMic()
                 _status.value = "Heard you"
@@ -124,6 +127,42 @@ class WakeWordService : Service() {
                     startService(Intent(this, WakeWordService::class.java).setAction(ACTION_RESUME))
                 }
             }
+        }
+    }
+
+    /**
+     * Offline dictation with the same Vosk model (no grammar). Used when Android's speech
+     * recogniser refuses to work while another app is in the foreground. Must be called on the
+     * main thread while the wake-word capture is released.
+     */
+    fun dictate(onText: (String?) -> Unit) {
+        val m = model ?: return onText(null)
+        val rec = try { Recognizer(m, 16000f) } catch (e: Exception) { return onText(null) }
+        var finished = false
+        var svc: SpeechService? = null
+        val handler = android.os.Handler(mainLooper)
+        fun finish(t: String?) {
+            if (finished) return
+            finished = true
+            handler.removeCallbacksAndMessages(null)
+            runCatching { svc?.stop(); svc?.shutdown() }
+            runCatching { rec.close() }
+            onText(t?.takeIf { it.isNotBlank() })
+        }
+        fun textOf(h: String?) = Json.parseOrNull(h ?: "")?.get("text")?.string?.trim()
+        try {
+            svc = SpeechService(rec, 16000f).also {
+                it.startListening(object : RecognitionListener {
+                    override fun onPartialResult(hypothesis: String?) = Unit
+                    override fun onResult(hypothesis: String?) { textOf(hypothesis)?.takeIf { t -> t.isNotEmpty() }?.let { t -> finish(t) } }
+                    override fun onFinalResult(hypothesis: String?) { finish(textOf(hypothesis)) }
+                    override fun onError(exception: Exception?) { finish(null) }
+                    override fun onTimeout() { finish(null) }
+                })
+            }
+            handler.postDelayed({ finish(null) }, 10_000)
+        } catch (e: Exception) {
+            finish(null)
         }
     }
 
@@ -143,6 +182,7 @@ class WakeWordService : Service() {
     }
 
     override fun onDestroy() {
+        if (instance === this) instance = null
         releaseMic()
         recognizer?.close(); recognizer = null
         model?.close(); model = null
@@ -155,6 +195,8 @@ class WakeWordService : Service() {
         const val ACTION_PAUSE = "dev.ciel.wake.PAUSE"
         const val ACTION_RESUME = "dev.ciel.wake.RESUME"
         private const val NOTIF_ID = 41
+        @Volatile var instance: WakeWordService? = null
+            private set
         private val _status = MutableStateFlow("Off")
         val status: StateFlow<String> = _status
 

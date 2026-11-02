@@ -143,6 +143,8 @@ class AppGraph(val context: Context) {
     val voice = CielVoice(context)
     val conversation = ConversationController(this)
     val voiceCoordinator = VoiceCoordinator(this)
+    val heyCiel = dev.ciel.app.voice.HeyCielSetup(this)
+    val connectionWizard = dev.ciel.ai.ConnectionWizard(http)
 
     init {
         loadUserSkills()

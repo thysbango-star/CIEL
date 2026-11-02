@@ -31,6 +31,8 @@ import androidx.core.app.NotificationCompat
 import androidx.core.app.ServiceCompat
 import dev.ciel.app.CielApplication
 import dev.ciel.app.R
+import dev.ciel.app.design.CielDesign
+import dev.ciel.app.design.DesignPalette
 import dev.ciel.app.platform.Notifications
 import dev.ciel.engine.CielState
 import kotlinx.coroutines.CoroutineScope
@@ -65,9 +67,13 @@ object StateColors {
     }
 }
 
-/** The compact animated emblem: two counter-rotating rune rings around a glowing core. */
+/** The compact animated emblem; its form follows the selected design. */
 class OrbView(context: Context) : View(context) {
     var state: CielState = CielState.IDLE
+        set(value) { field = value; invalidate() }
+    var design: CielDesign = CielDesign.HYBRID
+        set(value) { field = value; invalidate() }
+    var palette: DesignPalette = DesignPalette.of(CielDesign.HYBRID)
         set(value) { field = value; invalidate() }
     private var angle = 0f
     private val ring = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.STROKE }
@@ -81,34 +87,56 @@ class OrbView(context: Context) : View(context) {
     override fun onDetachedFromWindow() { animator.cancel(); super.onDetachedFromWindow() }
 
     override fun onDraw(canvas: Canvas) {
-        val c = StateColors.of(state)
+        val c = if (state == CielState.IDLE) palette.accent else StateColors.of(state)
         val cx = width / 2f; val cy = height / 2f; val r = minOf(cx, cy) * 0.92f
         val speed = when (state) { CielState.PROCESSING, CielState.ANALYSING, CielState.RESEARCHING, CielState.EXECUTING -> 3f; CielState.LISTENING -> 2f; else -> 1f }
         val a = angle * speed
         val pulse = if (state == CielState.LISTENING || state == CielState.SPEAKING) (0.85f + 0.15f * sin(Math.toRadians(a * 4.0)).toFloat()) else 1f
-        fill.shader = RadialGradient(cx, cy, r, intArrayOf(Color.argb(230, 5, 11, 24), Color.argb(255, 5, 11, 24)), null, Shader.TileMode.CLAMP)
+        val bg = palette.background
+        fill.shader = RadialGradient(cx, cy, r, intArrayOf(Color.argb(235, Color.red(bg), Color.green(bg), Color.blue(bg)), bg), null, Shader.TileMode.CLAMP)
         canvas.drawCircle(cx, cy, r, fill)
-        ring.color = c; ring.strokeWidth = r * 0.06f; ring.alpha = 255
-        canvas.drawCircle(cx, cy, r * 0.9f, ring)
-        // Rune ticks on the rotating outer ring.
-        ring.strokeWidth = r * 0.04f
-        for (i in 0 until 12) {
-            val t = Math.toRadians((a + i * 30).toDouble())
-            val r1 = r * 0.72f; val r2 = r * (if (i % 3 == 0) 0.84f else 0.79f)
-            canvas.drawLine(cx + (r1 * cos(t)).toFloat(), cy + (r1 * sin(t)).toFloat(), cx + (r2 * cos(t)).toFloat(), cy + (r2 * sin(t)).toFloat(), ring)
+        ring.color = c; ring.alpha = 255
+        when (design) {
+            CielDesign.GREAT_SAGE -> {
+                ring.strokeWidth = r * 0.07f
+                canvas.drawCircle(cx, cy, r * 0.82f * pulse, ring)
+            }
+            CielDesign.RAPHAEL -> {
+                ring.strokeWidth = r * 0.05f
+                polygon(canvas, cx, cy, r * 0.88f, 6, a * 0.5)
+                ring.alpha = 160
+                polygon(canvas, cx, cy, r * 0.58f, 6, (-a + 30).toDouble())
+                ring.alpha = 255
+                for (i in 0 until 6) {
+                    val t = Math.toRadians(a * 0.5 + i * 60)
+                    canvas.drawPoint(cx + (r * 0.88f * cos(t)).toFloat(), cy + (r * 0.88f * sin(t)).toFloat(), ring)
+                }
+            }
+            else -> {
+                ring.strokeWidth = r * 0.06f
+                canvas.drawCircle(cx, cy, r * 0.9f, ring)
+                ring.strokeWidth = r * 0.04f
+                for (i in 0 until 12) {
+                    val t = Math.toRadians((a + i * 30).toDouble())
+                    val r1 = r * 0.72f; val r2 = r * (if (i % 3 == 0) 0.84f else 0.79f)
+                    canvas.drawLine(cx + (r1 * cos(t)).toFloat(), cy + (r1 * sin(t)).toFloat(), cx + (r2 * cos(t)).toFloat(), cy + (r2 * sin(t)).toFloat(), ring)
+                }
+                ring.alpha = 170
+                polygon(canvas, cx, cy, r * 0.55f, if (design == CielDesign.CIEL) 6 else 4, -a * 1.5)
+            }
         }
-        // Counter-rotating inner hexagon.
-        ring.alpha = 170
+        fill.shader = RadialGradient(cx, cy, r * 0.32f * pulse, intArrayOf(Color.WHITE, c, Color.TRANSPARENT), floatArrayOf(0f, 0.45f, 1f), Shader.TileMode.CLAMP)
+        canvas.drawCircle(cx, cy, r * 0.32f * pulse, fill)
+    }
+
+    private fun polygon(canvas: Canvas, cx: Float, cy: Float, radius: Float, sides: Int, rotationDeg: Double) {
         val path = android.graphics.Path()
-        for (i in 0..6) {
-            val t = Math.toRadians((-a * 1.5 + i * 60))
-            val x = cx + (r * 0.55f * cos(t)).toFloat(); val y = cy + (r * 0.55f * sin(t)).toFloat()
+        for (i in 0..sides) {
+            val t = Math.toRadians(rotationDeg + i * 360.0 / sides)
+            val x = cx + (radius * cos(t)).toFloat(); val y = cy + (radius * sin(t)).toFloat()
             if (i == 0) path.moveTo(x, y) else path.lineTo(x, y)
         }
         canvas.drawPath(path, ring)
-        // Core.
-        fill.shader = RadialGradient(cx, cy, r * 0.32f * pulse, intArrayOf(Color.WHITE, c, Color.TRANSPARENT), floatArrayOf(0f, 0.45f, 1f), Shader.TileMode.CLAMP)
-        canvas.drawCircle(cx, cy, r * 0.32f * pulse, fill)
     }
 }
 
@@ -147,7 +175,11 @@ class FloatingCielService : Service() {
         val dp = resources.displayMetrics.density
         val graph = CielApplication.graph
 
+        val night = (resources.configuration.uiMode and android.content.res.Configuration.UI_MODE_NIGHT_MASK) == android.content.res.Configuration.UI_MODE_NIGHT_YES
+        val appearance = graph.settings.current.appearance
         val orb = OrbView(this).apply {
+            design = appearance.design
+            palette = DesignPalette.resolve(appearance, night)
             layoutParams = LinearLayout.LayoutParams((64 * dp).toInt(), (64 * dp).toInt())
             contentDescription = "Ciel. Tap to expand, double-tap for emergency stop, long-press to open."
         }
