@@ -27,7 +27,11 @@ A personal intelligence for Android, inspired by Ciel from *That Time I Got Rein
 
 See **[DEVELOPMENT_LOG.md](DEVELOPMENT_LOG.md)** for exactly what was tested where, and what remains.
 
-## Quick start
+## Quick start (v0.2)
+
+Download the latest APK: https://github.com/thysbango-star/CIEL/releases/download/debug-latest/ciel-debug.apk — on first launch Ciel walks you through choosing a design, connecting an AI (paste a key) and turning on **Hey Ciel**.
+
+## Quick start (details)
 
 1. Get the APK: download `ciel-debug-apk` from the latest GitHub Actions run, or build it (see [BUILDING.md](BUILDING.md)).
 2. Install it on your phone (allow "install unknown apps" for your browser/file manager).

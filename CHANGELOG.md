@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.2.0 — 2026-11-02 — Redesign
+
+### Added
+- **Hey Ciel**: say "Hey Ciel" (or "Ciel") from any screen. One-tap setup (microphone permission, one-time 40 MB offline model, start). A chime plays and a Gemini-style voice panel appears over the current app; if Android's recogniser is blocked in the background, Ciel transcribes the command offline.
+- **One-step connections**: choose a provider (or let Ciel detect it from the key), paste the key, press Connect. Ciel validates the key, discovers models, picks fast / reasoning / vision models and tests them.
+- **Four designs** with distinct layouts: Ciel (anime), Raphael (structured system), Great Sage (minimal, light), Hybrid (recommended). Design picker with live home / voice / floating previews; accent colour, animation level and light/dark in Appearance. The floating orb and voice panel follow the design.
+- New navigation: Home · Chats · Tasks · Connect · Settings. Multiple conversations. Settings hub; technical provider options moved behind Developer mode. First-run setup: design → connect → Hey Ciel.
+- 7 new tests for provider detection and automatic setup (52 total).
+
 ## 0.1.0-milestone1 — 2026-11-02
 
 First functional milestone covering phases 1–4 and the cores of phases 5–6.

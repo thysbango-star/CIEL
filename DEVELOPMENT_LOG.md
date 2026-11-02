@@ -1,5 +1,11 @@
 # Development log
 
+## Milestone 2 — 2026-11-02 (redesign)
+- Implemented: Hey Ciel (wake phrases, one-tap setup, voice panel, offline fallback), one-step connections, four designs + picker, new navigation, conversations, onboarding.
+- Tested: 52/52 core tests (incl. key detection, model choice, connection fallback); CI build of the Android app passed; APK published.
+- Not yet verified on a real phone: wake-word accuracy for "Hey Ciel" (the offline English model has no word "ciel", so similar-sounding "seal" is also accepted), background speech recognition, overlay appearance per OEM.
+- Known limitation: say "Hey Ciel", wait for the chime, then speak — a command spoken in the same breath as the wake word is not captured.
+
 ## Milestone 1.1 — 2026-11-02 (first CI build)
 - Repository pushed to GitHub (thysbango-star/CIEL). First GitHub Actions run **passed**:
   core tests 45/45 under Gradle, `:app:assembleDebug` BUILD SUCCESSFUL (debug APK ≈30 MB), lint completed.
