@@ -59,6 +59,7 @@ object VoiceOverlay {
         val orb = OrbView(host).apply {
             this.design = design
             this.palette = palette
+            this.theme = appearance.theme
             layoutParams = LinearLayout.LayoutParams((52 * dp).toInt(), (52 * dp).toInt())
             state = CielState.LISTENING
         }

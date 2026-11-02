@@ -125,6 +125,39 @@ fun taskTests() = T.suite("task-engine") {
         val t = waitFor(tasks, id)
         eq(TaskStatus.FAILED, t.status); check(!t.verified); eq(2, dev.performed.size); check("Stuck" in t.report!!)
     }
+    T.test("pause holds a task between steps; resume continues it; stop still works while paused") {
+        val stop = EmergencyStop()
+        val tasks = TaskManager(CoroutineScope(SupervisorJob() + Dispatchers.Default), stop)
+        var steps = 0
+        val id = tasks.start("count", "execute", title = "Counter") { h ->
+            repeat(1000) { h.checkpoint(); steps++; delay(5) }
+            TaskResult(true, "done", false)
+        }
+        delay(60); tasks.pause(id); delay(40)
+        val frozen = steps
+        delay(120)
+        check(steps <= frozen + 1) { "kept running while paused ($frozen → $steps)" }
+        eq(TaskStatus.PAUSED, tasks.get(id)!!.status); eq("Counter", tasks.get(id)!!.name)
+        tasks.resume(id); delay(80)
+        check(steps > frozen + 2) { "did not resume" }
+        tasks.pause(id); delay(30)
+        stop.trigger("test")
+        eq(TaskStatus.STOPPED, waitFor(tasks, id).status)
+    }
+    T.test("a second screen task is shown as queued until the first finishes") {
+        val stop = EmergencyStop()
+        val tasks = TaskManager(CoroutineScope(SupervisorJob() + Dispatchers.Default), stop)
+        val locks = ResourceLocks()
+        val dev = FakeDevice(screen("a", node(1, "Done")))
+        val agent = ScreenAgent(GuardedDevice(dev, stop, ConfirmationGate { true }) {}, { delay(150); PlannerDecision.Complete("ok", "Done shown") }, locks)
+        val first = tasks.start("one", "execute") { h -> agent.run(h, "one", AgentOptions(settleDelayMs = 1)).result }
+        delay(40)
+        val second = tasks.start("two", "execute") { h -> agent.run(h, "two", AgentOptions(settleDelayMs = 1)).result }
+        delay(40)
+        eq(TaskStatus.QUEUED, tasks.get(second)!!.status)
+        eq(TaskStatus.COMPLETED, waitFor(tasks, first).status)
+        eq(TaskStatus.COMPLETED, waitFor(tasks, second).status)
+    }
     T.test("resource lock serialises two screen tasks") {
         val locks = ResourceLocks()
         val order = mutableListOf<String>()
@@ -193,6 +226,18 @@ fun memoryTests() = T.suite("memory-engine") {
         check(m.remember("Inferred fact", MemoryCategory.PREFERENCE, source = "ciel") is MemoryManager.SaveResult.Rejected)
         m.updateSettings(MemorySettings(enabled = false))
         check(m.contextFor("units") == null)
+    }
+    T.test("memory backup round-trips and re-applies the sensitive-data filter on import") {
+        val a = MemoryManager(InMemoryMemoryRepository())
+        a.remember("Favourite game is Cookie Run Kingdom", MemoryCategory.GAME)
+        a.remember("Project Ciel uses Kotlin", MemoryCategory.PROJECT)
+        val text = dev.ciel.memory.MemoryBackup.export(a.search(""))
+        val tampered = text.replace("Project Ciel uses Kotlin", "my password is hunter2")
+        val b = MemoryManager(InMemoryMemoryRepository())
+        val r = dev.ciel.memory.MemoryBackup.import(tampered, b)
+        eq(1, r.imported); eq(1, r.skipped)
+        eq(MemoryCategory.GAME, b.search("cookie run").single().category)
+        eq(0, dev.ciel.memory.MemoryBackup.import("{}", b).imported)
     }
     T.test("task memories expire") {
         var now = 1_000_000L

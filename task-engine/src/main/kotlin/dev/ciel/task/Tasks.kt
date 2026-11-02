@@ -9,11 +9,12 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import java.util.UUID
 
-enum class TaskStatus { PLANNING, RUNNING, WAITING_FOR_USER, COMPLETED, FAILED, CANCELLED, STOPPED }
+enum class TaskStatus { PLANNING, QUEUED, RUNNING, PAUSED, WAITING_FOR_USER, COMPLETED, FAILED, CANCELLED, STOPPED }
 
 data class TaskStep(val description: String, val done: Boolean = false)
 
@@ -34,8 +35,14 @@ data class TaskState(
     val verified: Boolean = false,
     val startedAt: Long = System.currentTimeMillis(),
     val finishedAt: Long? = null,
+    /** Short name shown in the Tasks tab. */
+    val title: String? = null,
+    /** The app or game the task targets (package name), if any. */
+    val targetApp: String? = null,
 ) {
-    val isActive: Boolean get() = status == TaskStatus.PLANNING || status == TaskStatus.RUNNING || status == TaskStatus.WAITING_FOR_USER
+    val isActive: Boolean get() = status == TaskStatus.PLANNING || status == TaskStatus.QUEUED || status == TaskStatus.RUNNING ||
+        status == TaskStatus.PAUSED || status == TaskStatus.WAITING_FOR_USER
+    val name: String get() = title ?: objective
 }
 
 /** Handle given to running work so it can report progress. */
@@ -45,7 +52,9 @@ class TaskHandle internal constructor(
     private val manager: TaskManager,
 ) {
     fun update(transform: (TaskState) -> TaskState) = manager.mutate(id, transform)
-    fun step(description: String, app: String? = null) = update { it.copy(status = TaskStatus.RUNNING, currentStep = description, currentApp = app ?: it.currentApp) }
+    fun step(description: String, app: String? = null) = update {
+        it.copy(status = if (manager.isPaused(id)) TaskStatus.PAUSED else TaskStatus.RUNNING, currentStep = description, currentApp = app ?: it.currentApp)
+    }
     fun plan(steps: List<String>, completionCondition: String?) =
         update { it.copy(plan = steps.map { s -> TaskStep(s) }, completionCondition = completionCondition) }
     fun markStepDone(index: Int) = update { s ->
@@ -53,6 +62,13 @@ class TaskHandle internal constructor(
         s.copy(plan = plan, progress = if (plan.isEmpty()) s.progress else plan.count { it.done }.toFloat() / plan.size)
     }
     fun error(message: String) = update { it.copy(errors = it.errors + message) }
+
+    /**
+     * Called by long-running work between steps: throws if an emergency stop happened and
+     * suspends while the user has paused the task.
+     */
+    /** Returns true if the task was paused and has just resumed. */
+    suspend fun checkpoint(): Boolean = manager.checkpoint(id, generation)
 }
 
 data class TaskResult(val success: Boolean, val report: String, val verified: Boolean)
@@ -75,6 +91,7 @@ class TaskManager(
     private val _tasks = MutableStateFlow<List<TaskState>>(emptyList())
     val tasks: StateFlow<List<TaskState>> = _tasks.asStateFlow()
     private val jobs = HashMap<String, Job>()
+    private val pauseFlags = java.util.concurrent.ConcurrentHashMap<String, MutableStateFlow<Boolean>>()
 
     internal fun mutate(id: String, transform: (TaskState) -> TaskState) {
         _tasks.update { list -> list.map { if (it.id == id) transform(it) else it } }
@@ -82,9 +99,10 @@ class TaskManager(
 
     fun get(id: String): TaskState? = _tasks.value.firstOrNull { it.id == id }
 
-    fun start(objective: String, kind: String, body: suspend (TaskHandle) -> TaskResult): String {
+    fun start(objective: String, kind: String, title: String? = null, targetApp: String? = null, body: suspend (TaskHandle) -> TaskResult): String {
         val id = UUID.randomUUID().toString()
-        _tasks.update { (it + TaskState(id, objective, kind)).takeLast(50) }
+        _tasks.update { (it + TaskState(id, objective, kind, title = title, targetApp = targetApp)).takeLast(50) }
+        pauseFlags[id] = MutableStateFlow(false)
         val generation = emergencyStop.currentGeneration()
         val handle = TaskHandle(id, generation, this)
         val job = scope.launch(start = CoroutineStart.LAZY) {
@@ -107,6 +125,7 @@ class TaskManager(
                 mutate(id) { it.copy(status = TaskStatus.FAILED, errors = it.errors + (e.message ?: e.toString()), report = "Failed: ${e.message}", finishedAt = System.currentTimeMillis()) }
             } finally {
                 synchronized(jobs) { jobs.remove(id) }
+                pauseFlags.remove(id)
                 get(id)?.let { finished -> history?.let { h -> withContext(NonCancellable) { runCatching { h.save(finished) } } } }
             }
         }
@@ -117,6 +136,30 @@ class TaskManager(
     }
 
     fun cancel(id: String) { synchronized(jobs) { jobs[id] }?.cancel() }
+
+    /** Pauses at the task's next checkpoint (between steps). */
+    fun pause(id: String) {
+        val flag = pauseFlags[id] ?: return
+        flag.value = true
+        mutate(id) { it.copy(status = TaskStatus.PAUSED, currentStep = "Paused by you") }
+    }
+
+    fun resume(id: String) {
+        val flag = pauseFlags[id] ?: return
+        flag.value = false
+        mutate(id) { if (it.status == TaskStatus.PAUSED) it.copy(status = TaskStatus.RUNNING, currentStep = "Resuming…") else it }
+    }
+
+    fun isPaused(id: String) = pauseFlags[id]?.value == true
+
+    internal suspend fun checkpoint(id: String, generation: Long): Boolean {
+        emergencyStop.checkNotStopped(generation)
+        val flag = pauseFlags[id] ?: return false
+        if (!flag.value) return false
+        flag.first { !it }
+        emergencyStop.checkNotStopped(generation)
+        return true
+    }
 
     fun activeTasks(): List<TaskState> = _tasks.value.filter { it.isActive }
 }

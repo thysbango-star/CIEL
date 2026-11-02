@@ -46,46 +46,6 @@ import kotlinx.coroutines.launch
 import java.text.DateFormat
 import java.util.Date
 
-/** Task monitor (Part 10) + execution log (Part 16). */
-@Composable
-fun TasksScreen() {
-    val graph = CielApplication.graph
-    val tasks by graph.tasks.tasks.collectAsStateWithLifecycle()
-    val history by remember { graph.db.tasks().observe() }.collectAsStateWithLifecycle(emptyList())
-    val log by remember { graph.db.tasks().observeLog(60) }.collectAsStateWithLifecycle(emptyList<ActionLogEntity>())
-    val active = tasks.filter { it.isActive }
-    LazyColumn(Modifier.fillMaxSize().padding(12.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-        item {
-            CielPanel(title = "Active tasks") {
-                if (active.isEmpty()) Text("No tasks running.", color = CielColors.Muted)
-                active.forEach { t ->
-                    Text(t.objective, color = CielColors.Text)
-                    Text("${t.status} · ${t.currentApp ?: "-"} · ${t.currentStep ?: ""}", color = CielColors.Muted, style = MaterialTheme.typography.labelSmall)
-                    val p = t.progress
-                    if (p != null) LinearProgressIndicator(progress = { p }, modifier = Modifier.fillMaxWidth()) else LinearProgressIndicator(Modifier.fillMaxWidth())
-                    t.errors.takeLast(2).forEach { Text("⚠ $it", color = CielColors.Amber, style = MaterialTheme.typography.labelSmall) }
-                    TextButton(onClick = { graph.tasks.cancel(t.id) }) { Text("Cancel task") }
-                }
-                if (active.isNotEmpty()) Button(onClick = { graph.emergencyStop.trigger("task monitor") }) { Text("EMERGENCY STOP ALL") }
-            }
-        }
-        item { Text("History", style = MaterialTheme.typography.titleMedium, color = CielColors.Cyan) }
-        items(history.filter { h -> active.none { it.id == h.id } }, key = { "h" + it.id }) { t ->
-            CielPanel {
-                Text(t.objective, color = CielColors.Text)
-                val color = when (t.status) { TaskStatus.COMPLETED.name -> CielColors.Green; TaskStatus.STOPPED.name, TaskStatus.CANCELLED.name -> CielColors.Amber; else -> CielColors.Danger }
-                Text("${t.status}${if (t.verified) " · verified" else ""} · ${DateFormat.getDateTimeInstance().format(Date(t.startedAt))}", color = color, style = MaterialTheme.typography.labelSmall)
-                t.report?.let { Text(it, color = CielColors.Muted) }
-            }
-        }
-        item { Text("Action log", style = MaterialTheme.typography.titleMedium, color = CielColors.Cyan) }
-        items(log, key = { "l" + it.id }) { a ->
-            Text("${DateFormat.getTimeInstance().format(Date(a.timestamp))} · ${a.action} · ${a.risk.lowercase()}${a.approved?.let { if (it) " · approved" else " · declined" } ?: ""} → ${a.outcome}",
-                color = CielColors.Muted, style = MaterialTheme.typography.labelSmall)
-        }
-    }
-}
-
 /** Status dashboard (Part 15) and entry points to management screens. */
 @Composable
 fun SystemHub(nav: NavHostController) {
@@ -186,6 +146,33 @@ fun MemoryScreen() {
                     TextButton(onClick = { scope.launch { graph.memory.forget(m.id) } }) { Text("Delete", color = CielColors.Danger) }
                 }
             }
+        }
+        item {
+            val context = androidx.compose.ui.platform.LocalContext.current
+            var backupNote by remember { mutableStateOf<String?>(null) }
+            val exporter = androidx.activity.compose.rememberLauncherForActivityResult(androidx.activity.result.contract.ActivityResultContracts.CreateDocument("application/json")) { uri ->
+                if (uri != null) scope.launch {
+                    backupNote = runCatching {
+                        val text = dev.ciel.memory.MemoryBackup.export(graph.memory.search("", limit = 10_000))
+                        context.contentResolver.openOutputStream(uri)?.use { it.write(text.toByteArray()) } ?: error("Couldn't open the file")
+                        "Exported ${all.size} memories."
+                    }.getOrElse { "Export failed: ${it.message}" }
+                }
+            }
+            val importer = androidx.activity.compose.rememberLauncherForActivityResult(androidx.activity.result.contract.ActivityResultContracts.OpenDocument()) { uri ->
+                if (uri != null) scope.launch {
+                    backupNote = runCatching {
+                        val text = context.contentResolver.openInputStream(uri)?.use { it.readBytes().decodeToString() } ?: error("Couldn't open the file")
+                        val r = dev.ciel.memory.MemoryBackup.import(text, graph.memory)
+                        "Imported ${r.imported}, skipped ${r.skipped}." + (r.reasons.firstOrNull()?.let { " ($it)" } ?: "")
+                    }.getOrElse { "Import failed: ${it.message}" }
+                }
+            }
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                OutlinedButton(onClick = { exporter.launch("ciel-memories.json") }) { Text("Export") }
+                OutlinedButton(onClick = { importer.launch(arrayOf("application/json", "text/plain", "*/*")) }) { Text("Import backup") }
+            }
+            backupNote?.let { Text(it, color = CielColors.Muted) }
         }
         item {
             var confirm by remember { mutableStateOf(false) }

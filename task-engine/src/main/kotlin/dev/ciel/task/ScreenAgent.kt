@@ -57,8 +57,16 @@ class ScreenAgent(
     private val planner: ActionPlanner,
     private val locks: ResourceLocks,
 ) {
-    suspend fun run(handle: TaskHandle, objective: String, options: AgentOptions = AgentOptions()): AgentRun =
-        locks.withResource(ResourceLocks.Resource.SCREEN) { loop(handle, objective, options) }
+    suspend fun run(handle: TaskHandle, objective: String, options: AgentOptions = AgentOptions()): AgentRun {
+        // Only one task may drive the screen at a time; others wait visibly in the queue.
+        if (locks.isBusy(ResourceLocks.Resource.SCREEN)) {
+            handle.update { it.copy(status = TaskStatus.QUEUED, currentStep = "Waiting for another task to finish") }
+        }
+        return locks.withResource(ResourceLocks.Resource.SCREEN) {
+            handle.update { if (it.status == TaskStatus.QUEUED) it.copy(status = TaskStatus.RUNNING, currentStep = "Starting") else it }
+            loop(handle, objective, options)
+        }
+    }
 
     private suspend fun loop(handle: TaskHandle, objective: String, options: AgentOptions): AgentRun {
         if (!device.isAvailable) {
@@ -71,6 +79,9 @@ class ScreenAgent(
         var screen = device.observe(handle.generation, options.includeScreenshots)
 
         for (step in 0 until options.maxSteps) {
+            // Honours pause and emergency stop between steps; after a pause the user may have
+            // changed the screen, so look again before deciding.
+            if (handle.checkpoint()) screen = device.observe(handle.generation, options.includeScreenshots)
             val sig = screen.signature()
             val warnings = ineffective.filter { it.key.first == sig && it.value >= options.maxIneffectiveRepeats }
                 .map { "Already tried \"${it.key.second}\" on this screen ${it.value} times with no visible effect. Choose a different approach." }

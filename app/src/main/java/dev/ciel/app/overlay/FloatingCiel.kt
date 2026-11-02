@@ -67,66 +67,88 @@ object StateColors {
     }
 }
 
-/** The compact animated emblem; its form follows the selected design. */
+/**
+ * The compact crystal used by Floating Ciel and the voice panel: Ciel's core image (tinted for
+ * the theme) inside rings matching the layout. Runs at full frame rate only while Ciel is active;
+ * idle redraws ~15 times a second to save battery.
+ */
 class OrbView(context: Context) : View(context) {
     var state: CielState = CielState.IDLE
+        set(value) { field = value; updateAnimation(); invalidate() }
+    var design: CielDesign = CielDesign.GREAT_SAGE
         set(value) { field = value; invalidate() }
-    var design: CielDesign = CielDesign.HYBRID
+    var palette: DesignPalette = DesignPalette.resolve(dev.ciel.app.design.Appearance())
         set(value) { field = value; invalidate() }
-    var palette: DesignPalette = DesignPalette.of(CielDesign.HYBRID)
-        set(value) { field = value; invalidate() }
+    var theme: dev.ciel.app.design.ThemeStyle = dev.ciel.app.design.ThemeStyle.AZURE_CALM
+        set(value) {
+            field = value
+            corePaint.colorFilter = android.graphics.ColorMatrixColorFilter(android.graphics.ColorMatrix(dev.ciel.app.design.CrystalTint.matrix(value)))
+            invalidate()
+        }
     private var angle = 0f
     private val ring = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.STROKE }
     private val fill = Paint(Paint.ANTI_ALIAS_FLAG)
+    private val corePaint = Paint(Paint.ANTI_ALIAS_FLAG or Paint.FILTER_BITMAP_FLAG).apply {
+        colorFilter = android.graphics.ColorMatrixColorFilter(android.graphics.ColorMatrix(dev.ciel.app.design.CrystalTint.matrix(dev.ciel.app.design.ThemeStyle.AZURE_CALM)))
+    }
+    private val core: android.graphics.Bitmap? = coreBitmap(context)
+    private val dst = android.graphics.RectF()
     private val animator = ValueAnimator.ofFloat(0f, 360f).apply {
         duration = 9000; repeatCount = ValueAnimator.INFINITE; interpolator = LinearInterpolator()
         addUpdateListener { angle = it.animatedValue as Float; invalidate() }
     }
+    private var attached = false
 
-    override fun onAttachedToWindow() { super.onAttachedToWindow(); animator.start() }
-    override fun onDetachedFromWindow() { animator.cancel(); super.onDetachedFromWindow() }
+    override fun onAttachedToWindow() { super.onAttachedToWindow(); attached = true; updateAnimation() }
+    override fun onDetachedFromWindow() { attached = false; animator.cancel(); super.onDetachedFromWindow() }
+
+    private fun updateAnimation() {
+        if (!attached) return
+        if (state == CielState.IDLE) { if (animator.isRunning) animator.pause() }
+        else if (animator.isPaused) animator.resume() else if (!animator.isStarted) animator.start()
+    }
 
     override fun onDraw(canvas: Canvas) {
         val c = if (state == CielState.IDLE) palette.accent else StateColors.of(state)
-        val cx = width / 2f; val cy = height / 2f; val r = minOf(cx, cy) * 0.92f
+        val cx = width / 2f; val cy = height / 2f; val r = minOf(cx, cy) * 0.95f
+        if (state == CielState.IDLE && attached) { angle = (angle + 0.6f) % 360f; postInvalidateDelayed(66) }
         val speed = when (state) { CielState.PROCESSING, CielState.ANALYSING, CielState.RESEARCHING, CielState.EXECUTING -> 3f; CielState.LISTENING -> 2f; else -> 1f }
         val a = angle * speed
-        val pulse = if (state == CielState.LISTENING || state == CielState.SPEAKING) (0.85f + 0.15f * sin(Math.toRadians(a * 4.0)).toFloat()) else 1f
-        val bg = palette.background
-        fill.shader = RadialGradient(cx, cy, r, intArrayOf(Color.argb(235, Color.red(bg), Color.green(bg), Color.blue(bg)), bg), null, Shader.TileMode.CLAMP)
+        val pulse = if (state == CielState.LISTENING || state == CielState.SPEAKING) (0.92f + 0.08f * sin(Math.toRadians(a * 4.0)).toFloat()) else 1f
+        // Soft aura
+        fill.shader = RadialGradient(cx, cy, r, intArrayOf(Color.argb(110, Color.red(c), Color.green(c), Color.blue(c)), Color.TRANSPARENT), null, Shader.TileMode.CLAMP)
         canvas.drawCircle(cx, cy, r, fill)
-        ring.color = c; ring.alpha = 255
+        ring.color = c; ring.strokeWidth = r * 0.035f
         when (design) {
-            CielDesign.GREAT_SAGE -> {
-                ring.strokeWidth = r * 0.07f
-                canvas.drawCircle(cx, cy, r * 0.82f * pulse, ring)
-            }
-            CielDesign.RAPHAEL -> {
-                ring.strokeWidth = r * 0.05f
-                polygon(canvas, cx, cy, r * 0.88f, 6, a * 0.5)
-                ring.alpha = 160
-                polygon(canvas, cx, cy, r * 0.58f, 6, (-a + 30).toDouble())
-                ring.alpha = 255
-                for (i in 0 until 6) {
-                    val t = Math.toRadians(a * 0.5 + i * 60)
-                    canvas.drawPoint(cx + (r * 0.88f * cos(t)).toFloat(), cy + (r * 0.88f * sin(t)).toFloat(), ring)
+            CielDesign.RAPHAEL -> { ring.alpha = 220; polygon(canvas, cx, cy, r * 0.92f, 6, a * 0.5) }
+            CielDesign.CIEL -> {
+                ring.alpha = 220; canvas.drawCircle(cx, cy, r * 0.92f, ring)
+                for (i in 0 until 12) {
+                    val t = Math.toRadians((a + i * 30).toDouble())
+                    canvas.drawLine(cx + (r * 0.8f * cos(t)).toFloat(), cy + (r * 0.8f * sin(t)).toFloat(), cx + (r * 0.9f * cos(t)).toFloat(), cy + (r * 0.9f * sin(t)).toFloat(), ring)
                 }
             }
             else -> {
-                ring.strokeWidth = r * 0.06f
-                canvas.drawCircle(cx, cy, r * 0.9f, ring)
-                ring.strokeWidth = r * 0.04f
-                for (i in 0 until 12) {
-                    val t = Math.toRadians((a + i * 30).toDouble())
-                    val r1 = r * 0.72f; val r2 = r * (if (i % 3 == 0) 0.84f else 0.79f)
-                    canvas.drawLine(cx + (r1 * cos(t)).toFloat(), cy + (r1 * sin(t)).toFloat(), cx + (r2 * cos(t)).toFloat(), cy + (r2 * sin(t)).toFloat(), ring)
-                }
+                // Two tilted orbital ellipses like the main crystal.
                 ring.alpha = 170
-                polygon(canvas, cx, cy, r * 0.55f, if (design == CielDesign.CIEL) 6 else 4, -a * 1.5)
+                for ((i, tilt) in listOf(-18f, 40f).withIndex()) {
+                    canvas.save(); canvas.rotate(tilt + a * 0.1f * (if (i == 0) 1 else -1), cx, cy)
+                    canvas.drawOval(cx - r * 0.95f, cy - r * 0.3f, cx + r * 0.95f, cy + r * 0.3f, ring)
+                    canvas.restore()
+                }
             }
         }
-        fill.shader = RadialGradient(cx, cy, r * 0.32f * pulse, intArrayOf(Color.WHITE, c, Color.TRANSPARENT), floatArrayOf(0f, 0.45f, 1f), Shader.TileMode.CLAMP)
-        canvas.drawCircle(cx, cy, r * 0.32f * pulse, fill)
+        // Crystal core image
+        val coreR = r * 0.62f * pulse
+        if (core != null) {
+            canvas.save(); canvas.rotate(a * 0.3f, cx, cy)
+            dst.set(cx - coreR, cy - coreR, cx + coreR, cy + coreR)
+            canvas.drawBitmap(core, null, dst, corePaint)
+            canvas.restore()
+        } else {
+            fill.shader = RadialGradient(cx, cy, coreR, intArrayOf(Color.WHITE, c, Color.TRANSPARENT), floatArrayOf(0f, 0.45f, 1f), Shader.TileMode.CLAMP)
+            canvas.drawCircle(cx, cy, coreR, fill)
+        }
     }
 
     private fun polygon(canvas: Canvas, cx: Float, cy: Float, radius: Float, sides: Int, rotationDeg: Double) {
@@ -137,6 +159,15 @@ class OrbView(context: Context) : View(context) {
             if (i == 0) path.moveTo(x, y) else path.lineTo(x, y)
         }
         canvas.drawPath(path, ring)
+    }
+
+    companion object {
+        @Volatile private var cached: android.graphics.Bitmap? = null
+        /** Decoded once (downsampled to 256 px) and shared by every orb. */
+        fun coreBitmap(context: Context): android.graphics.Bitmap? = cached ?: runCatching {
+            val opts = android.graphics.BitmapFactory.Options().apply { inSampleSize = 2 }
+            android.graphics.BitmapFactory.decodeResource(context.resources, R.drawable.ciel_core, opts)
+        }.getOrNull().also { cached = it }
     }
 }
 
@@ -179,8 +210,10 @@ class FloatingCielService : Service() {
         val appearance = graph.settings.current.appearance
         val orb = OrbView(this).apply {
             design = appearance.design
+            theme = appearance.theme
             palette = DesignPalette.resolve(appearance, night)
-            layoutParams = LinearLayout.LayoutParams((64 * dp).toInt(), (64 * dp).toInt())
+            val px = (appearance.floatingSize.dp * dp).toInt()
+            layoutParams = LinearLayout.LayoutParams(px, px)
             contentDescription = "Ciel. Tap to expand, double-tap for emergency stop, long-press to open."
         }
         val text = TextView(this).apply { setTextColor(Color.rgb(220, 248, 255)); textSize = 14f; maxLines = 7 }

@@ -33,6 +33,9 @@ class MainActivity : ComponentActivity() {
         handle(intent)
     }
 
+    override fun onStart() { super.onStart(); visible = true }
+    override fun onStop() { visible = false; super.onStop() }
+
     override fun onResume() {
         super.onResume()
         // Permissions may have changed in system settings.
@@ -42,13 +45,17 @@ class MainActivity : ComponentActivity() {
         val s = graph.settings.current
         if (s.wakeWordEnabled && dev.ciel.app.voice.VoskModels.isInstalled(this) &&
             graph.capabilities.has(Manifest.permission.RECORD_AUDIO) &&
-            dev.ciel.app.voice.WakeWordService.status.value !in setOf("Listening", "Paused", "Heard you")) {
+            dev.ciel.app.voice.WakeWordService.instance == null) {
             dev.ciel.app.voice.WakeWordService.start(this)
         }
         if (s.floatingEnabled && android.provider.Settings.canDrawOverlays(this)) dev.ciel.app.overlay.FloatingCielService.start(this)
     }
 
     private fun handle(intent: Intent?) {
+        intent?.getStringExtra(EXTRA_ROUTE)?.let { route ->
+            intent.removeExtra(EXTRA_ROUTE)
+            lifecycleScope.launch { kotlinx.coroutines.delay(300); CielApplication.graph.navEvents.emit(route) }
+        }
         if (intent?.getBooleanExtra(EXTRA_LISTEN, false) == true) {
             intent.removeExtra(EXTRA_LISTEN)
             lifecycleScope.launch { listen() }
@@ -65,5 +72,10 @@ class MainActivity : ComponentActivity() {
         }
     }
 
-    companion object { const val EXTRA_LISTEN = "dev.ciel.LISTEN" }
+    companion object {
+        const val EXTRA_LISTEN = "dev.ciel.LISTEN"
+        const val EXTRA_ROUTE = "dev.ciel.ROUTE"
+        @Volatile var visible = false
+            private set
+    }
 }

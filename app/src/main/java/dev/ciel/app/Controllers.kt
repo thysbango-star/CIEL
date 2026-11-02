@@ -139,6 +139,7 @@ class ConversationController(private val graph: AppGraph) {
 
     fun send(text: String, images: List<ImageInput> = emptyList(), mode: ReasoningMode = ReasoningMode.CONVERSE, speak: Boolean = false, onFinished: (() -> Unit)? = null) {
         if (text.isBlank()) return
+        if (images.isEmpty()) UiCommands.parse(text)?.let { handleUi(it, text, speak, onFinished); return }
         job?.cancel()
         graph.voice.stop()
         val cid = conversationId // a reply always lands in the conversation it was asked in
@@ -176,6 +177,34 @@ class ConversationController(private val graph: AppGraph) {
         // A stop or a newer request cancels this turn; the caller (e.g. the wake-word service)
         // must still get control back.
         job?.invokeOnCompletion { cause -> if (cause != null) onFinished?.invoke() }
+    }
+
+    /** Interface commands ("open tasks", "switch to Starfall", "stop talking"…) — instant and offline. */
+    private fun handleUi(cmd: UiCommand, text: String, speak: Boolean, onFinished: (() -> Unit)?) {
+        val reply: String? = when (cmd) {
+            is UiCommand.Navigate -> { graph.navigate(cmd.route); "Opening ${cmd.label}." }
+            is UiCommand.SetTheme -> { graph.appScope.launch { graph.settings.update { it.copy(appearance = it.appearance.copy(theme = cmd.theme, accent = null)) } }; "Affirmative. ${cmd.theme.title} theme applied." }
+            is UiCommand.SetLayout -> { graph.appScope.launch { graph.settings.update { it.copy(appearance = it.appearance.copy(design = cmd.design)) } }; "Affirmative. ${cmd.design.title} layout applied." }
+            UiCommand.StopSpeaking -> { graph.voice.stop(); null }
+            UiCommand.Repeat -> _lastReply.value ?: "I haven't said anything yet, Master."
+            UiCommand.Status -> {
+                val active = graph.tasks.activeTasks()
+                if (active.isEmpty()) "Report. No tasks are running. I'm standing by."
+                else "Report. " + active.joinToString(" ") { "${it.name}: ${it.status.name.lowercase().replace('_', ' ')}${it.currentStep?.let { s -> ", $s" } ?: ""}." }
+            }
+        }
+        if (reply == null) { onFinished?.invoke(); return }
+        val cid = conversationId
+        graph.appScope.launch {
+            val dao = graph.db.messages()
+            if (cmd !is UiCommand.Repeat) {
+                dao.insert(MessageEntity(conversationId = cid, role = "user", text = text))
+                dao.insert(MessageEntity(conversationId = cid, role = "ciel", text = reply, offline = true))
+                _lastReply.value = reply
+            }
+            _state.value = CielState.COMPLETED
+            if (speak) withContext(Dispatchers.Main) { graph.voice.speak(reply) { onFinished?.invoke() } } else onFinished?.invoke()
+        }
     }
 
     fun cancel() { job?.cancel(); _streaming.value = ""; _state.value = CielState.IDLE }

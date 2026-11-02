@@ -49,6 +49,9 @@ data class AppSettings(
     val searchBaseUrl: String? = null,
     val wakeWordEnabled: Boolean = false,
     val wakePhrases: List<String> = DEFAULT_WAKE_PHRASES,
+    val wakeSensitivity: dev.ciel.app.voice.WakeSensitivity = dev.ciel.app.voice.WakeSensitivity.NORMAL,
+    /** Also wake on "Ciel" alone (not just "Hey Ciel"). */
+    val wakeSingleWord: Boolean = true,
     val floatingEnabled: Boolean = false,
     /** Lets autonomous automation send screenshots to a vision model (in addition to the element tree). */
     val allowScreenshots: Boolean = false,
@@ -59,6 +62,7 @@ data class AppSettings(
     val onboardingDone: Boolean = false,
     /** Shows URLs/models/headers editing for providers. Off for normal use. */
     val developerMode: Boolean = false,
+    val tasks: dev.ciel.app.TaskSettings = dev.ciel.app.TaskSettings(),
 )
 
 private val Context.dataStore by preferencesDataStore("ciel_settings")
@@ -112,18 +116,32 @@ class SettingsStore(private val context: Context, scope: CoroutineScope) {
             opt("searchBaseUrl", s.searchBaseUrl)
             "wakeWordEnabled" to s.wakeWordEnabled
             "wakePhrases" to s.wakePhrases
+            "wakeSensitivity" to s.wakeSensitivity.name
+            "wakeSingleWord" to s.wakeSingleWord
             "floatingEnabled" to s.floatingEnabled
             "allowScreenshots" to s.allowScreenshots
             "reducedMotion" to s.reducedMotion
             "discordWebhooks" to s.discordWebhooks
             "appearance" to json {
                 "design" to s.appearance.design.name
+                "theme" to s.appearance.theme.name
                 opt("accent", s.appearance.accent?.name)
                 "animation" to s.appearance.animation.name
                 "themeMode" to s.appearance.themeMode.name
+                "glow" to s.appearance.glow
+                "particles" to s.appearance.particles
+                "transparency" to s.appearance.transparency
+                "ringSpeed" to s.appearance.ringSpeed
+                "floatingSize" to s.appearance.floatingSize.name
             }
             "onboardingDone" to s.onboardingDone
             "developerMode" to s.developerMode
+            "tasks" to json {
+                "maxSteps" to s.tasks.maxSteps
+                "timeoutMinutes" to s.tasks.timeoutMinutes
+                "notifyOnFinish" to s.tasks.notifyOnFinish
+                "templates" to s.tasks.templates.map { dev.ciel.app.TaskSpecCodec.encode(it) }
+            }
         }.toString()
 
         fun decode(text: String): AppSettings {
@@ -166,6 +184,8 @@ class SettingsStore(private val context: Context, scope: CoroutineScope) {
                 wakeWordEnabled = o["wakeWordEnabled"]?.bool ?: false,
                 wakePhrases = o["wakePhrases"]?.array?.mapNotNull { it.string }?.ifEmpty { null }?.takeIf { it != listOf("ciel", "seal") } ?: d.wakePhrases,
                 floatingEnabled = o["floatingEnabled"]?.bool ?: false,
+                wakeSensitivity = runCatching { dev.ciel.app.voice.WakeSensitivity.valueOf(o["wakeSensitivity"]?.string ?: "") }.getOrDefault(dev.ciel.app.voice.WakeSensitivity.NORMAL),
+                wakeSingleWord = o["wakeSingleWord"]?.bool ?: true,
                 allowScreenshots = o["allowScreenshots"]?.bool ?: false,
                 reducedMotion = o["reducedMotion"]?.bool ?: false,
                 discordWebhooks = o["discordWebhooks"]?.array?.mapNotNull { it.string } ?: emptyList(),
@@ -175,11 +195,25 @@ class SettingsStore(private val context: Context, scope: CoroutineScope) {
                         accent = a["accent"]?.string?.let { n -> runCatching { dev.ciel.app.design.AccentColor.valueOf(n) }.getOrNull() },
                         animation = runCatching { dev.ciel.app.design.AnimationLevel.valueOf(a["animation"]?.string ?: "") }.getOrDefault(dev.ciel.app.design.AnimationLevel.FULL),
                         themeMode = runCatching { dev.ciel.app.design.ThemeMode.valueOf(a["themeMode"]?.string ?: "") }.getOrDefault(dev.ciel.app.design.ThemeMode.SYSTEM),
+                        theme = runCatching { dev.ciel.app.design.ThemeStyle.valueOf(a["theme"]?.string ?: "") }.getOrDefault(dev.ciel.app.design.ThemeStyle.AZURE_CALM),
+                        glow = a["glow"]?.number?.toFloat()?.coerceIn(0f, 1f) ?: 0.7f,
+                        particles = a["particles"]?.number?.toFloat()?.coerceIn(0f, 1f) ?: 0.5f,
+                        transparency = a["transparency"]?.number?.toFloat()?.coerceIn(0f, 1f) ?: 0.5f,
+                        ringSpeed = a["ringSpeed"]?.number?.toFloat()?.coerceIn(0.25f, 2f) ?: 1f,
+                        floatingSize = runCatching { dev.ciel.app.design.FloatingSize.valueOf(a["floatingSize"]?.string ?: "") }.getOrDefault(dev.ciel.app.design.FloatingSize.MEDIUM),
                     )
                 } ?: dev.ciel.app.design.Appearance(),
                 // Existing installs with a provider already configured skip the first-run flow.
                 onboardingDone = o["onboardingDone"]?.bool ?: (o["providers"]?.array?.isNotEmpty() == true),
                 developerMode = o["developerMode"]?.bool ?: false,
+                tasks = o["tasks"]?.let { t ->
+                    dev.ciel.app.TaskSettings(
+                        maxSteps = t["maxSteps"]?.int?.coerceIn(5, 150) ?: 40,
+                        timeoutMinutes = t["timeoutMinutes"]?.int?.coerceIn(1, 120) ?: 10,
+                        notifyOnFinish = t["notifyOnFinish"]?.bool ?: true,
+                        templates = t["templates"]?.array?.mapNotNull { dev.ciel.app.TaskSpecCodec.decode(it.toString()) } ?: emptyList(),
+                    )
+                } ?: dev.ciel.app.TaskSettings(),
             )
         }
 

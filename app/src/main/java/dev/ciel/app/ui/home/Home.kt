@@ -112,8 +112,13 @@ private fun StopBar(m: HomeModel, actions: HomeActions) {
 
 @Composable
 private fun Visual(m: HomeModel, actions: HomeActions, size: androidx.compose.ui.unit.Dp) {
-    CielVisual(m.state, m.level, Modifier.size(size).clickable(onClick = actions.onTapVisual)
-        .semantics { contentDescription = "Ciel, ${stateText(m.state)}. Tap to speak." })
+    CielVisual(
+        m.state, m.level,
+        Modifier.size(size).clickable(onClick = actions.onTapVisual)
+            .semantics { contentDescription = "Ciel, ${stateText(m.state)}. Tap to speak." },
+        offline = !m.online,
+        progress = m.activeTasks.firstOrNull()?.progress,
+    )
 }
 
 // ------------------------------------------------------------------------------------------
@@ -121,8 +126,7 @@ private fun Visual(m: HomeModel, actions: HomeActions, size: androidx.compose.ui
 // ------------------------------------------------------------------------------------------
 @Composable
 fun CielHome(m: HomeModel, actions: HomeActions, modifier: Modifier = Modifier) {
-    val bg = Brush.radialGradient(listOf(CielColors.Cyan.copy(alpha = 0.10f), CielColors.Void))
-    Box(modifier.fillMaxSize().background(bg)) {
+    Box(modifier.fillMaxSize()) {
         if (landscape()) {
             Row(Modifier.fillMaxSize().padding(8.dp)) {
                 Column(Modifier.width(260.dp).fillMaxHeight(), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.Center) {
@@ -193,30 +197,70 @@ fun RaphaelHome(m: HomeModel, actions: HomeActions, modifier: Modifier = Modifie
 }
 
 // ------------------------------------------------------------------------------------------
-// C — Great Sage: one ring, one line of text, one button. Voice first; history on demand.
+// C — Great Sage (default): the reference layout. Crystal, status line, Ciel's line, mic.
 // ------------------------------------------------------------------------------------------
 @Composable
 fun SageHome(m: HomeModel, actions: HomeActions, modifier: Modifier = Modifier) {
     var typing by remember { mutableStateOf(false) }
-    Column(modifier.fillMaxSize().padding(20.dp).imePadding(), horizontalAlignment = Alignment.CenterHorizontally) {
-        Notices(m, actions, max = 1)
-        Spacer(Modifier.weight(0.6f))
-        Visual(m, actions, if (landscape()) 150.dp else 220.dp)
-        Spacer(Modifier.height(20.dp))
-        val line = m.partial ?: m.streaming.takeLast(300).ifBlank { null } ?: when (m.state) {
-            CielState.IDLE, CielState.COMPLETED -> m.lastReply?.take(300) ?: "Say \"Hey Ciel\"."
-            else -> stateText(m.state) + "…"
+    val glass = androidx.compose.foundation.shape.RoundedCornerShape(28.dp)
+    Column(modifier.fillMaxSize().padding(horizontal = 20.dp, vertical = 12.dp).imePadding(), horizontalAlignment = Alignment.CenterHorizontally) {
+        // Header: title, floating-assistant crystal, settings
+        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.Top) {
+            Column(Modifier.weight(1f)) {
+                Text("Ciel", style = MaterialTheme.typography.headlineMedium, color = CielColors.Text)
+                Text(LocalLook.current.theme.title, style = MaterialTheme.typography.bodyMedium, color = CielColors.Muted)
+            }
+            Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                androidx.compose.material3.IconButton(onClick = { actions.onOpen("settings") }) {
+                    androidx.compose.material3.Icon(androidx.compose.material.icons.Icons.Filled.Settings, "Settings", tint = CielColors.Text)
+                }
+                Box(Modifier.size(46.dp).border(1.dp, CielColors.PanelBorder, androidx.compose.foundation.shape.CircleShape)
+                    .clickable { actions.onOpen("floating") }, contentAlignment = Alignment.Center) {
+                    CielVisual(CielState.IDLE, 0f, Modifier.size(40.dp))
+                }
+            }
         }
-        Text(line, style = MaterialTheme.typography.bodyLarge, color = CielColors.Text, textAlign = TextAlign.Center,
-            modifier = Modifier.fillMaxWidth().height(if (landscape()) 60.dp else 140.dp).verticalScroll(rememberScrollState()))
+        Notices(m, actions, max = 1)
         Spacer(Modifier.weight(0.4f))
+        Visual(m, actions, if (landscape()) 170.dp else 280.dp)
+        Spacer(Modifier.weight(0.3f))
+        // Status line
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Box(Modifier.size(8.dp).background(CielColors.forState(m.state), androidx.compose.foundation.shape.CircleShape))
+            val status = when (m.state) {
+                CielState.IDLE -> if (m.online) "Idle • Awaiting your command…" else "Offline • Basic commands only"
+                CielState.LISTENING -> "Listening…"
+                else -> stateText(m.state) + "…"
+            }
+            Text("  $status", style = MaterialTheme.typography.bodyMedium, color = CielColors.Muted)
+        }
+        Spacer(Modifier.height(10.dp))
+        // Ciel's line
+        val line = m.partial?.let { "“$it”" } ?: m.streaming.takeLast(220).ifBlank { null } ?: when (m.state) {
+            CielState.IDLE, CielState.COMPLETED -> m.lastReply?.take(220) ?: "“I am here, Master.”"
+            else -> "…"
+        }
+        Box(Modifier.fillMaxWidth().background(CielColors.Panel, glass).border(1.dp, CielColors.PanelBorder, glass)
+            .clickable { actions.onOpen("chats") }.padding(horizontal = 18.dp, vertical = 12.dp), contentAlignment = Alignment.Center) {
+            Text(line, style = MaterialTheme.typography.bodyLarge, color = CielColors.Text, textAlign = TextAlign.Center, maxLines = if (landscape()) 2 else 5)
+        }
+        Spacer(Modifier.height(14.dp))
         StopBar(m, actions)
-        if (typing) InputBar(actions, bigMic = false) else BigMic(m.state, actions.onMic)
-        Row {
-            TextButton(onClick = { typing = !typing }) { Text(if (typing) "Use voice" else "Type instead", color = CielColors.Muted) }
-            TextButton(onClick = { actions.onOpen("chats") }) { Text("History", color = CielColors.Muted) }
+        if (typing) InputBar(actions) else BigMic(m.state, actions.onMic)
+        Spacer(Modifier.height(10.dp))
+        // Bottom row: skills, tasks, memory, type
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceEvenly) {
+            SageIcon(androidx.compose.material.icons.Icons.Filled.GridView, "Skills") { actions.onOpen("skills") }
+            SageIcon(androidx.compose.material.icons.Icons.Filled.BarChart, "Tasks") { actions.onOpen("tasks") }
+            SageIcon(androidx.compose.material.icons.Icons.Filled.Inventory2, "Memory") { actions.onOpen("memory") }
+            SageIcon(if (typing) androidx.compose.material.icons.Icons.Filled.Mic else androidx.compose.material.icons.Icons.Filled.Keyboard, if (typing) "Voice" else "Type") { typing = !typing }
         }
     }
+}
+
+@Composable
+private fun SageIcon(icon: androidx.compose.ui.graphics.vector.ImageVector, label: String, onClick: () -> Unit) {
+    androidx.compose.material3.IconButton(onClick = onClick) { androidx.compose.material3.Icon(icon, label, tint = CielColors.Text.copy(alpha = 0.8f)) }
 }
 
 // ------------------------------------------------------------------------------------------

@@ -1,6 +1,5 @@
 package dev.ciel.app.ui.theme
 
-import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Typography
 import androidx.compose.material3.darkColorScheme
@@ -18,13 +17,18 @@ import dev.ciel.app.design.AnimationLevel
 import dev.ciel.app.design.Appearance
 import dev.ciel.app.design.CielDesign
 import dev.ciel.app.design.DesignPalette
+import dev.ciel.app.design.ThemeStyle
 import dev.ciel.app.overlay.StateColors
 import dev.ciel.engine.CielState
 
-/** The active design, its palette and animation level, available anywhere in the UI tree. */
-data class CielLook(val design: CielDesign, val palette: DesignPalette, val animation: AnimationLevel)
+/** The active appearance and its resolved palette, available anywhere in the UI tree. */
+data class CielLook(val appearance: Appearance, val palette: DesignPalette) {
+    val design: CielDesign get() = appearance.design
+    val theme: ThemeStyle get() = appearance.theme
+    val animation: AnimationLevel get() = appearance.animation
+}
 
-val LocalLook = staticCompositionLocalOf { CielLook(CielDesign.HYBRID, DesignPalette.of(CielDesign.HYBRID), AnimationLevel.FULL) }
+val LocalLook = staticCompositionLocalOf { CielLook(Appearance(), DesignPalette.resolve(Appearance())) }
 
 /**
  * Colour accessors used throughout the UI. They read the active design, so every screen follows
@@ -65,8 +69,7 @@ private fun typographyFor(design: CielDesign): Typography {
 
 @Composable
 fun CielTheme(appearance: Appearance, content: @Composable () -> Unit) {
-    val palette = DesignPalette.resolve(appearance, isSystemInDarkTheme())
-    CielTheme(CielLook(appearance.design, palette, appearance.animation), content)
+    CielTheme(CielLook(appearance, DesignPalette.resolve(appearance)), content)
 }
 
 @Composable

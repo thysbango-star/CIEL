@@ -91,7 +91,7 @@ fun SettingsHub(nav: NavHostController) {
     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(12.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
         Text("Settings", style = MaterialTheme.typography.titleLarge, color = CielColors.Text)
         CielPanel {
-            HubRow("Appearance", "${s.appearance.design.title} design · accent · animation · light/dark") { nav.go("appearance") }
+            HubRow("Appearance", "${s.appearance.theme.title} theme · ${s.appearance.design.title} layout · glow, particles, rings") { nav.go("appearance") }
             HubRow("Voice & Hey Ciel", if (s.wakeWordEnabled) "Hey Ciel is on · voice, speed, activation" else "Turn on \"Hey Ciel\" · voice, speed") { nav.go("voice") }
             HubRow("AI connection", if (s.providers.isEmpty()) "Not connected" else "${s.providers.map { it.id.substringBefore(':') }.distinct().size} provider(s) connected") { nav.go("connect") }
             HubRow("Memory", "What Ciel remembers, and what she may remember") { nav.go("memory") }

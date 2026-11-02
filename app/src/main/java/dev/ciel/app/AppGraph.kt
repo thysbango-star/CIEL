@@ -101,6 +101,8 @@ class AppGraph(val context: Context) {
     val gameProfiles = RoomGameProfileRepository(db.games())
     val reminders = AndroidReminderScheduler(context, db.reminders())
 
+    fun screenAgentOrNull(): ScreenAgent? = screenAgent()
+
     private fun screenAgent(): ScreenAgent? {
         if (!guardedDevice.isAvailable || settings.current.providers.none { it.enabled }) return null
         return ScreenAgent(guardedDevice, LlmActionPlanner(gateway) { settings.current.providers }, locks)
@@ -144,9 +146,12 @@ class AppGraph(val context: Context) {
     val conversation = ConversationController(this)
     val voiceCoordinator = VoiceCoordinator(this)
     val heyCiel = dev.ciel.app.voice.HeyCielSetup(this)
+    val heyCielDiagnostics = dev.ciel.app.voice.HeyCielDiagnostics(this)
+    val taskLauncher = TaskLauncher(this)
     val connectionWizard = dev.ciel.ai.ConnectionWizard(http)
 
     init {
+        taskLauncher.watchCompletions()
         loadUserSkills()
         // Keep subsystems in sync with settings.
         appScope.launch { settings.flow.map { it.memory }.distinctUntilChanged().collect { memory.updateSettings(it) } }
@@ -164,6 +169,16 @@ class AppGraph(val context: Context) {
     }
 
     fun capabilitiesChanged() = skills.refresh()
+
+    /** Navigation requests from voice ("Ciel, open tasks"). Brings Ciel to the front if needed. */
+    val navEvents = kotlinx.coroutines.flow.MutableSharedFlow<String>(extraBufferCapacity = 4)
+    fun navigate(route: String) {
+        if (dev.ciel.app.ui.MainActivity.visible) navEvents.tryEmit(route)
+        else runCatching {
+            context.startActivity(Intent(context, dev.ciel.app.ui.MainActivity::class.java)
+                .putExtra(dev.ciel.app.ui.MainActivity.EXTRA_ROUTE, route).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+        }
+    }
 
     // ---- installable skills (JSON files, no rebuild)
     fun loadUserSkills() {

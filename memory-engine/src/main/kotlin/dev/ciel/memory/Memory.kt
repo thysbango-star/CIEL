@@ -224,3 +224,36 @@ class MemorySkill(private val memory: MemoryManager) : Skill {
         else -> ToolOutcome.fail("Unknown tool $tool")
     }
 }
+
+/** Export / import of memories as JSON (Memory → Export / Import). */
+object MemoryBackup {
+    fun export(items: List<MemoryItem>): String = dev.ciel.core.json.json {
+        "format" to "ciel-memory-v1"
+        "exportedAt" to System.currentTimeMillis()
+        "memories" to items.map { m ->
+            dev.ciel.core.json.json {
+                "category" to m.category.name; "content" to m.content; "tags" to m.tags
+                "source" to m.source; "pinned" to m.pinned; "createdAt" to m.createdAt
+            }
+        }
+    }.toString()
+
+    data class ImportResult(val imported: Int, val skipped: Int, val reasons: List<String>)
+
+    /** Imports through [MemoryManager.remember], so sensitive-data and retention rules still apply. */
+    suspend fun import(text: String, into: MemoryManager): ImportResult {
+        val root = dev.ciel.core.json.Json.parseOrNull(text)
+        if (root?.get("format")?.string != "ciel-memory-v1") return ImportResult(0, 0, listOf("This isn't a Ciel memory backup."))
+        var ok = 0; var skipped = 0; val reasons = mutableListOf<String>()
+        root["memories"]?.array.orEmpty().forEach { m ->
+            val content = m["content"]?.string ?: return@forEach
+            val cat = runCatching { MemoryCategory.valueOf(m["category"]?.string ?: "") }.getOrDefault(MemoryCategory.PREFERENCE)
+            val tags = m["tags"]?.array?.mapNotNull { it.string } ?: emptyList()
+            when (val r = into.remember(content, cat, tags, source = "user")) {
+                is MemoryManager.SaveResult.Saved -> ok++
+                is MemoryManager.SaveResult.Rejected -> { skipped++; if (reasons.size < 5) reasons += r.reason }
+            }
+        }
+        return ImportResult(ok, skipped, reasons)
+    }
+}

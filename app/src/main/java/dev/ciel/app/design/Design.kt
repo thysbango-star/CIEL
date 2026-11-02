@@ -2,19 +2,44 @@ package dev.ciel.app.design
 
 import android.graphics.Color
 
-/** The four interface designs. Each has its own layout, visualisation and palette. */
+/** Layouts: how the home screen is arranged. */
 enum class CielDesign(val title: String, val tagline: String, val supportsLight: Boolean) {
-    CIEL("Ciel", "Anime interface — magic circles, holographic panels, particles", false),
-    RAPHAEL("Raphael", "Advanced system — geometric core, structured data panels", false),
-    GREAT_SAGE("Great Sage", "Minimal — one calm ring, voice first, almost nothing else", true),
-    HYBRID("Hybrid", "Recommended — Ciel's magic, Raphael's structure, Sage's calm", true),
+    GREAT_SAGE("Great Sage", "Minimal — the crystal, one line of text, voice first", true),
+    HYBRID("Hybrid", "Crystal + quick skills, recent tasks and conversation", true),
+    CIEL("Ciel", "Immersive — large crystal with floating conversation", false),
+    RAPHAEL("Raphael", "Structured — crystal with data panels and analysis log", false),
+}
+
+/** Background decoration drawn behind the interface for each theme. */
+enum class BackgroundKind { CLOUDS, LIGHT_RAYS, VOID, PETALS, LEAVES, GOLDEN_RAYS, STARS, GLASS_WAVES }
+
+/** The eight visual themes. Each changes palette, background, particles and the crystal's tint. */
+enum class ThemeStyle(
+    val title: String,
+    val tagline: String,
+    val background: BackgroundKind,
+    /** Hue rotation applied to the crystal image, in degrees. */
+    val crystalHue: Float,
+    /** Saturation multiplier for the crystal image. */
+    val crystalSaturation: Float,
+) {
+    AZURE_CALM("Azure Calm", "Clean. Elegant. Timeless.", BackgroundKind.CLOUDS, 0f, 1f),
+    ETHEREAL_LIGHT("Ethereal Light", "Pure. Serene. Divine.", BackgroundKind.LIGHT_RAYS, 8f, 0.9f),
+    VOID_MINIMAL("Void Minimal", "Simple. Focused. Powerful.", BackgroundKind.VOID, 12f, 1f),
+    TWILIGHT_SAGE("Twilight Sage", "Calm. Mystical. Elegant.", BackgroundKind.PETALS, 70f, 1f),
+    NATURES_WISDOM("Nature's Wisdom", "Peaceful. Natural. Balanced.", BackgroundKind.LEAVES, -25f, 1.05f),
+    DIVINE_LIGHT("Divine Light", "Sacred. Regal. Pure.", BackgroundKind.GOLDEN_RAYS, 0f, 0.35f),
+    STARFALL("Starfall", "Infinite. Boundless. Calm.", BackgroundKind.STARS, 15f, 1f),
+    GLASSMORPHISM("Glassmorphism", "Modern. Minimal. Smooth.", BackgroundKind.GLASS_WAVES, 5f, 0.95f),
 }
 
 enum class AnimationLevel(val label: String) { OFF("Off"), SUBTLE("Subtle"), FULL("Full") }
 
 enum class ThemeMode(val label: String) { SYSTEM("System"), DARK("Dark"), LIGHT("Light") }
 
-/** Accent presets the user can pick in Appearance. null = the design's own accent. */
+enum class FloatingSize(val label: String, val dp: Int) { SMALL("Small", 52), MEDIUM("Medium", 64), LARGE("Large", 80) }
+
+/** Accent presets the user can pick in Appearance. null = the theme's own accent. */
 enum class AccentColor(val label: String, val argb: Int) {
     CYAN("Cyan", 0xFF5CE1FF.toInt()),
     AZURE("Azure", 0xFF3D8BFF.toInt()),
@@ -25,15 +50,26 @@ enum class AccentColor(val label: String, val argb: Int) {
 }
 
 data class Appearance(
-    val design: CielDesign = CielDesign.HYBRID,
+    val design: CielDesign = CielDesign.GREAT_SAGE,
+    val theme: ThemeStyle = ThemeStyle.AZURE_CALM,
     val accent: AccentColor? = null,
     val animation: AnimationLevel = AnimationLevel.FULL,
     val themeMode: ThemeMode = ThemeMode.SYSTEM,
+    /** 0..1 */
+    val glow: Float = 0.7f,
+    /** 0..1 */
+    val particles: Float = 0.5f,
+    /** 0..1 — how see-through panels are. */
+    val transparency: Float = 0.5f,
+    /** 0.25..2 — orbital ring speed multiplier. */
+    val ringSpeed: Float = 1f,
+    val floatingSize: FloatingSize = FloatingSize.MEDIUM,
 )
 
 /** Colours as ARGB ints so both Compose and the View-based overlays can use them. */
 data class DesignPalette(
     val background: Int,
+    val background2: Int,
     val surface: Int,
     val panel: Int,
     val border: Int,
@@ -47,48 +83,37 @@ data class DesignPalette(
     val isLight: Boolean = false,
 ) {
     companion object {
-        fun of(design: CielDesign, accent: AccentColor? = null, light: Boolean = false): DesignPalette {
-            val base = when (design) {
-                CielDesign.CIEL -> DesignPalette(
-                    background = 0xFF050B18.toInt(), surface = 0xFF0A1830.toInt(), panel = 0xCC0C1E3A.toInt(),
-                    border = 0x995CE1FF.toInt(), accent = 0xFF5CE1FF.toInt(), accent2 = 0xFFBDF4FF.toInt(),
-                    text = 0xFFDDF6FF.toInt(), muted = 0xFF8FB4C8.toInt())
-                CielDesign.RAPHAEL -> DesignPalette(
-                    background = 0xFF02040A.toInt(), surface = 0xFF070D1A.toInt(), panel = 0xF00B1426.toInt(),
-                    border = 0xFF1E3A66.toInt(), accent = 0xFF3D8BFF.toInt(), accent2 = 0xFF00E5FF.toInt(),
-                    text = 0xFFE6F0FF.toInt(), muted = 0xFF7086A8.toInt())
-                CielDesign.GREAT_SAGE -> if (light) DesignPalette(
-                    background = 0xFFF4F9FF.toInt(), surface = 0xFFFFFFFF.toInt(), panel = 0xF2FFFFFF.toInt(),
-                    border = 0xFFCFE3F7.toInt(), accent = 0xFF2A7DE1.toInt(), accent2 = 0xFF7DB8F5.toInt(),
-                    text = 0xFF0E2A47.toInt(), muted = 0xFF6A84A0.toInt(), isLight = true)
-                    else DesignPalette(
-                    background = 0xFF0B1622.toInt(), surface = 0xFF102031.toInt(), panel = 0xEE132638.toInt(),
-                    border = 0xFF22405E.toInt(), accent = 0xFF7DB8F5.toInt(), accent2 = 0xFFCFE3F7.toInt(),
-                    text = 0xFFE8F2FC.toInt(), muted = 0xFF88A2BD.toInt())
-                CielDesign.HYBRID -> if (light) DesignPalette(
-                    background = 0xFFEFF5FC.toInt(), surface = 0xFFFFFFFF.toInt(), panel = 0xEEFFFFFF.toInt(),
-                    border = 0xFFB9D6F2.toInt(), accent = 0xFF1C8FC9.toInt(), accent2 = 0xFF4A6FDB.toInt(),
-                    text = 0xFF0B2236.toInt(), muted = 0xFF5D7A94.toInt(), isLight = true)
-                    else DesignPalette(
-                    background = 0xFF060D1C.toInt(), surface = 0xFF0C1830.toInt(), panel = 0xD90E1D36.toInt(),
-                    border = 0x8C5CE1FF.toInt(), accent = 0xFF5CE1FF.toInt(), accent2 = 0xFF8FB8FF.toInt(),
-                    text = 0xFFDDF0FF.toInt(), muted = 0xFF8BA6C2.toInt())
-            }
-            return if (accent == null) base else base.copy(accent = accent.argb, border = withAlpha(accent.argb, if (base.isLight) 0x66 else 0x8C))
+        fun forTheme(t: ThemeStyle): DesignPalette = when (t) {
+            ThemeStyle.AZURE_CALM -> DesignPalette(0xFF061633.toInt(), 0xFF0E3270.toInt(), 0xFF0A1F45.toInt(), 0xB30A2350.toInt(),
+                0x8C7FD3FF.toInt(), 0xFF7FD3FF.toInt(), 0xFFCFEAFF.toInt(), 0xFFE6F4FF.toInt(), 0xFF8FB0D0.toInt())
+            ThemeStyle.ETHEREAL_LIGHT -> DesignPalette(0xFFEFF6FF.toInt(), 0xFFC6DCF6.toInt(), 0xFFFFFFFF.toInt(), 0xB3FFFFFF.toInt(),
+                0x993E7BD6.toInt(), 0xFF3E7BD6.toInt(), 0xFF7FB2F0.toInt(), 0xFF0D2A4A.toInt(), 0xFF5E7FA3.toInt(), isLight = true)
+            ThemeStyle.VOID_MINIMAL -> DesignPalette(0xFF010309.toInt(), 0xFF040A1C.toInt(), 0xFF050B18.toInt(), 0xCC060E20.toInt(),
+                0x803D8BFF.toInt(), 0xFF3D8BFF.toInt(), 0xFF9CC4FF.toInt(), 0xFFDDE8FF.toInt(), 0xFF6F84A8.toInt())
+            ThemeStyle.TWILIGHT_SAGE -> DesignPalette(0xFF100A2A.toInt(), 0xFF2D2068.toInt(), 0xFF1A1340.toInt(), 0xB3221A55.toInt(),
+                0x8CA68CFF.toInt(), 0xFFA68CFF.toInt(), 0xFFE0D4FF.toInt(), 0xFFEEE8FF.toInt(), 0xFFA196C8.toInt())
+            ThemeStyle.NATURES_WISDOM -> DesignPalette(0xFF031B1C.toInt(), 0xFF0B4140.toInt(), 0xFF07292A.toInt(), 0xB30A3332.toInt(),
+                0x8C3EE6C1.toInt(), 0xFF3EE6C1.toInt(), 0xFFB4F5E4.toInt(), 0xFFE2FBF4.toInt(), 0xFF84B6AC.toInt())
+            ThemeStyle.DIVINE_LIGHT -> DesignPalette(0xFFF7F3EA.toInt(), 0xFFDCD6CA.toInt(), 0xFFFFFDF8.toInt(), 0xB3FFFDF6.toInt(),
+                0x99C9A24A.toInt(), 0xFFB8902F.toInt(), 0xFFD9BC6E.toInt(), 0xFF2A2418.toInt(), 0xFF7D735E.toInt(), isLight = true)
+            ThemeStyle.STARFALL -> DesignPalette(0xFF020611.toInt(), 0xFF0A1736.toInt(), 0xFF060E24.toInt(), 0xB3081430.toInt(),
+                0x808FB8FF.toInt(), 0xFF8FB8FF.toInt(), 0xFFDCE8FF.toInt(), 0xFFE8F0FF.toInt(), 0xFF7F92B8.toInt())
+            ThemeStyle.GLASSMORPHISM -> DesignPalette(0xFF183A8C.toInt(), 0xFF5A86E0.toInt(), 0xFF2A4FA8.toInt(), 0x33FFFFFF,
+                0x66FFFFFF, 0xFFDCEBFF.toInt(), 0xFFFFFFFF.toInt(), 0xFFFFFFFF.toInt(), 0xFFC9D9F5.toInt())
         }
 
-        fun of(design: CielDesign) = of(design, null, design == CielDesign.GREAT_SAGE)
+        fun withAlpha(argb: Int, alpha: Int) = Color.argb(alpha.coerceIn(0, 255), Color.red(argb), Color.green(argb), Color.blue(argb))
 
-        fun withAlpha(argb: Int, alpha: Int) = Color.argb(alpha, Color.red(argb), Color.green(argb), Color.blue(argb))
-
-        /** Resolves light/dark for an appearance and the system setting. */
-        fun resolve(a: Appearance, systemDark: Boolean): DesignPalette {
-            val light = a.design.supportsLight && when (a.themeMode) {
-                ThemeMode.LIGHT -> true
-                ThemeMode.DARK -> false
-                ThemeMode.SYSTEM -> if (a.design == CielDesign.GREAT_SAGE) true else !systemDark
-            }
-            return of(a.design, a.accent, light)
+        /** Palette for an appearance: theme colours, optional accent, panel transparency. */
+        fun resolve(a: Appearance, @Suppress("UNUSED_PARAMETER") systemDark: Boolean = true): DesignPalette {
+            var p = forTheme(a.theme)
+            if (a.accent != null) p = p.copy(accent = a.accent.argb, border = withAlpha(a.accent.argb, if (p.isLight) 0x66 else 0x8C))
+            // Transparency 0 → nearly opaque panels, 1 → very see-through glass.
+            val baseAlpha = Color.alpha(p.panel)
+            val panelAlpha = (baseAlpha * (1.3f - a.transparency * 0.9f)).toInt().coerceIn(0x22, 0xF2)
+            return p.copy(panel = withAlpha(p.panel, panelAlpha))
         }
+
+        fun of(theme: ThemeStyle) = forTheme(theme)
     }
 }

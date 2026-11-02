@@ -53,6 +53,8 @@ import dev.ciel.app.ui.screens.TasksScreen
 import dev.ciel.app.ui.screens.VoiceScreen
 import dev.ciel.app.ui.theme.CielColors
 import dev.ciel.app.ui.theme.CielTheme
+import dev.ciel.app.ui.components.ThemeBackground
+import kotlinx.coroutines.launch
 import dev.ciel.engine.CielState
 
 private data class Tab(val route: String, val label: String, val icon: ImageVector)
@@ -69,9 +71,11 @@ fun CielApp(onListen: () -> Unit) {
     val graph = CielApplication.graph
     val settings by graph.settings.flow.collectAsStateWithLifecycle()
     CielTheme(settings.appearance) {
-        if (!settings.onboardingDone) {
-            Box(Modifier.fillMaxSize().background(CielColors.Void).safeDrawingPadding()) { OnboardingScreen() }
-        } else MainShell(onListen)
+        ThemeBackground(Modifier.fillMaxSize()) {
+            if (!settings.onboardingDone) {
+                Box(Modifier.fillMaxSize().safeDrawingPadding()) { OnboardingScreen() }
+            } else MainShell(onListen)
+        }
     }
 }
 
@@ -81,6 +85,7 @@ private fun MainShell(onListen: () -> Unit) {
     val nav = rememberNavController()
     val backStack by nav.currentBackStackEntryAsState()
     val route = backStack?.destination?.route
+    val context = androidx.compose.ui.platform.LocalContext.current
     val actions = HomeActions(
         onMic = onListen,
         onSend = { text, image, mode -> graph.conversation.send(text, listOfNotNull(image), mode) },
@@ -88,12 +93,13 @@ private fun MainShell(onListen: () -> Unit) {
         onTapVisual = { if (graph.conversation.state.value == CielState.SPEAKING) graph.voice.stop() else onListen() },
         onConnect = { nav.go("connect") },
         onEnableHeyCiel = { nav.go("voice") },
-        onOpen = { nav.go(it) },
+        onOpen = { route -> if (route == "floating") toggleFloating(context) else nav.go(route) },
     )
+    androidx.compose.runtime.LaunchedEffect(nav) { graph.navEvents.collect { nav.go(it) } }
     Scaffold(
-        containerColor = CielColors.Void,
+        containerColor = androidx.compose.ui.graphics.Color.Transparent,
         bottomBar = {
-            NavigationBar(containerColor = CielColors.Deep) {
+            NavigationBar(containerColor = CielColors.Panel) {
                 tabs.forEach { t ->
                     NavigationBarItem(
                         selected = route == t.route,
@@ -106,7 +112,7 @@ private fun MainShell(onListen: () -> Unit) {
             }
         },
     ) { padding ->
-        Box(Modifier.fillMaxSize().background(CielColors.Void).padding(padding)) {
+        Box(Modifier.fillMaxSize().padding(padding)) {
             NavHost(nav, startDestination = "home") {
                 composable("home") { HomeScreen(actions) }
                 composable("chats") { ChatsScreen(onOpened = { nav.navigate("home") { popUpTo("home") { inclusive = true } } }) }
@@ -152,3 +158,16 @@ fun ConfirmationHost() {
 }
 
 fun NavHostController.go(route: String) = navigate(route) { launchSingleTop = true }
+
+/** Shows or hides Floating Ciel; asks for the overlay permission the first time. */
+fun toggleFloating(context: android.content.Context) {
+    val graph = CielApplication.graph
+    if (!android.provider.Settings.canDrawOverlays(context)) {
+        context.startActivity(android.content.Intent(android.provider.Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
+            android.net.Uri.parse("package:${context.packageName}")).addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK))
+        return
+    }
+    val on = !graph.settings.current.floatingEnabled
+    graph.appScope.launch { graph.settings.update { it.copy(floatingEnabled = on) } }
+    if (on) dev.ciel.app.overlay.FloatingCielService.start(context) else dev.ciel.app.overlay.FloatingCielService.stop(context)
+}
