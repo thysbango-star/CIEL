@@ -1,0 +1,192 @@
+package dev.ciel.app.data
+
+import android.content.Context
+import androidx.datastore.preferences.core.edit
+import androidx.datastore.preferences.core.stringPreferencesKey
+import androidx.datastore.preferences.preferencesDataStore
+import dev.ciel.ai.AuthStyle
+import dev.ciel.ai.CapabilityTier
+import dev.ciel.ai.FreeTier
+import dev.ciel.ai.ProtocolKind
+import dev.ciel.ai.ProviderConfig
+import dev.ciel.core.json.Json
+import dev.ciel.core.json.JsonObject
+import dev.ciel.core.json.JsonValue
+import dev.ciel.core.json.json
+import dev.ciel.engine.EngineSettings
+import dev.ciel.engine.PersonaSettings
+import dev.ciel.memory.MemoryCategory
+import dev.ciel.memory.MemorySettings
+import dev.ciel.research.SearchProviderKind
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.flow.SharingStarted
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.stateIn
+import kotlinx.coroutines.runBlocking
+
+data class VoiceSettings(
+    val voiceName: String? = null,
+    val speechRate: Float = 1.0f,
+    val pitch: Float = 1.0f,
+    val speakResponses: Boolean = true,
+    val continuousConversation: Boolean = false,
+)
+
+data class AppSettings(
+    val providers: List<ProviderConfig> = emptyList(),
+    val engine: EngineSettings = EngineSettings(),
+    val memory: MemorySettings = MemorySettings(),
+    val voice: VoiceSettings = VoiceSettings(),
+    val searchKind: SearchProviderKind? = null,
+    val searchBaseUrl: String? = null,
+    val wakeWordEnabled: Boolean = false,
+    val wakePhrases: List<String> = listOf("ciel", "seal"),
+    val floatingEnabled: Boolean = false,
+    /** Lets autonomous automation send screenshots to a vision model (in addition to the element tree). */
+    val allowScreenshots: Boolean = false,
+    val reducedMotion: Boolean = false,
+    val discordWebhooks: List<String> = emptyList(),
+)
+
+private val Context.dataStore by preferencesDataStore("ciel_settings")
+private val KEY = stringPreferencesKey("settings_json_v1")
+
+/** All settings as one JSON document in DataStore. Secrets are NOT stored here (see KeyVault). */
+class SettingsStore(private val context: Context, scope: CoroutineScope) {
+    val flow: StateFlow<AppSettings> = context.dataStore.data
+        .map { prefs -> prefs[KEY]?.let { decode(it) } ?: AppSettings() }
+        .stateIn(scope, SharingStarted.Eagerly, runBlocking { load() })
+
+    private suspend fun load(): AppSettings = context.dataStore.data.first()[KEY]?.let { decode(it) } ?: AppSettings()
+
+    val current: AppSettings get() = flow.value
+
+    suspend fun update(transform: (AppSettings) -> AppSettings) {
+        context.dataStore.edit { prefs ->
+            val now = prefs[KEY]?.let { decode(it) } ?: AppSettings()
+            prefs[KEY] = encode(transform(now))
+        }
+    }
+
+    companion object {
+        fun encode(s: AppSettings): String = json {
+            "providers" to s.providers.map { encodeProvider(it) }
+            "engine" to json {
+                "formOfAddress" to s.engine.persona.formOfAddress
+                "useSystemMarkers" to s.engine.persona.useSystemMarkers
+                opt("userName", s.engine.persona.userName)
+                "language" to s.engine.persona.language
+                "autoSelect" to s.engine.autoSelect
+                opt("preferredProviderId", s.engine.preferredProviderId)
+                "streaming" to s.engine.streaming
+                "shareMemoryWithProviders" to s.engine.shareMemoryWithProviders
+                "maxToolRounds" to s.engine.maxToolRounds
+            }
+            "memory" to json {
+                "enabled" to s.memory.enabled
+                "retained" to s.memory.retainedCategories.map { it.name }
+                "allowInferred" to s.memory.allowInferredMemories
+                "taskTtlHours" to s.memory.taskMemoryTtlHours
+            }
+            "voice" to json {
+                opt("voiceName", s.voice.voiceName)
+                "speechRate" to s.voice.speechRate
+                "pitch" to s.voice.pitch
+                "speakResponses" to s.voice.speakResponses
+                "continuous" to s.voice.continuousConversation
+            }
+            opt("searchKind", s.searchKind?.name)
+            opt("searchBaseUrl", s.searchBaseUrl)
+            "wakeWordEnabled" to s.wakeWordEnabled
+            "wakePhrases" to s.wakePhrases
+            "floatingEnabled" to s.floatingEnabled
+            "allowScreenshots" to s.allowScreenshots
+            "reducedMotion" to s.reducedMotion
+            "discordWebhooks" to s.discordWebhooks
+        }.toString()
+
+        fun decode(text: String): AppSettings {
+            val o = Json.parseOrNull(text)?.obj ?: return AppSettings()
+            val d = AppSettings()
+            val e = o["engine"]
+            val m = o["memory"]
+            val v = o["voice"]
+            return AppSettings(
+                providers = o["providers"]?.array?.mapNotNull { decodeProvider(it) } ?: emptyList(),
+                engine = EngineSettings(
+                    persona = PersonaSettings(
+                        formOfAddress = e?.get("formOfAddress")?.string ?: d.engine.persona.formOfAddress,
+                        useSystemMarkers = e?.get("useSystemMarkers")?.bool ?: true,
+                        userName = e?.get("userName")?.string,
+                        language = e?.get("language")?.string ?: "English",
+                    ),
+                    autoSelect = e?.get("autoSelect")?.bool ?: true,
+                    preferredProviderId = e?.get("preferredProviderId")?.string,
+                    streaming = e?.get("streaming")?.bool ?: true,
+                    shareMemoryWithProviders = e?.get("shareMemoryWithProviders")?.bool ?: true,
+                    maxToolRounds = e?.get("maxToolRounds")?.int ?: 6,
+                ),
+                memory = MemorySettings(
+                    enabled = m?.get("enabled")?.bool ?: true,
+                    retainedCategories = m?.get("retained")?.array?.mapNotNull { runCatching { MemoryCategory.valueOf(it.string ?: "") }.getOrNull() }?.toSet()
+                        ?: MemoryCategory.values().toSet(),
+                    allowInferredMemories = m?.get("allowInferred")?.bool ?: false,
+                    taskMemoryTtlHours = m?.get("taskTtlHours")?.int ?: 24,
+                ),
+                voice = VoiceSettings(
+                    voiceName = v?.get("voiceName")?.string,
+                    speechRate = v?.get("speechRate")?.number?.toFloat() ?: 1f,
+                    pitch = v?.get("pitch")?.number?.toFloat() ?: 1f,
+                    speakResponses = v?.get("speakResponses")?.bool ?: true,
+                    continuousConversation = v?.get("continuous")?.bool ?: false,
+                ),
+                searchKind = o["searchKind"]?.string?.let { runCatching { SearchProviderKind.valueOf(it) }.getOrNull() },
+                searchBaseUrl = o["searchBaseUrl"]?.string,
+                wakeWordEnabled = o["wakeWordEnabled"]?.bool ?: false,
+                wakePhrases = o["wakePhrases"]?.array?.mapNotNull { it.string }?.ifEmpty { null } ?: d.wakePhrases,
+                floatingEnabled = o["floatingEnabled"]?.bool ?: false,
+                allowScreenshots = o["allowScreenshots"]?.bool ?: false,
+                reducedMotion = o["reducedMotion"]?.bool ?: false,
+                discordWebhooks = o["discordWebhooks"]?.array?.mapNotNull { it.string } ?: emptyList(),
+            )
+        }
+
+        fun encodeProvider(p: ProviderConfig): JsonObject = json {
+            "id" to p.id; "displayName" to p.displayName; "protocol" to p.protocol.name; "baseUrl" to p.baseUrl; "model" to p.model
+            "authStyle" to p.authStyle.name; opt("authHeaderName", p.authHeaderName); "extraHeaders" to p.extraHeaders
+            opt("contextWindow", p.contextWindow); "supportsVision" to p.supportsVision; "supportsTools" to p.supportsTools
+            "supportsStreaming" to p.supportsStreaming; "tier" to p.tier.name; "freeTier" to p.freeTier.name
+            opt("rateLimitNote", p.rateLimitNote); opt("dailyRequestLimit", p.dailyRequestLimit)
+            opt("temperature", p.temperature); opt("maxOutputTokens", p.maxOutputTokens)
+            "enabled" to p.enabled; "dataPolicyAcknowledged" to p.dataPolicyAcknowledged
+        }
+
+        fun decodeProvider(v: JsonValue): ProviderConfig? {
+            val id = v["id"]?.string ?: return null
+            return ProviderConfig(
+                id = id,
+                displayName = v["displayName"]?.string ?: id,
+                protocol = runCatching { ProtocolKind.valueOf(v["protocol"]?.string ?: "") }.getOrDefault(ProtocolKind.OPENAI_CHAT_COMPLETIONS),
+                baseUrl = v["baseUrl"]?.string ?: return null,
+                model = v["model"]?.string ?: return null,
+                authStyle = runCatching { AuthStyle.valueOf(v["authStyle"]?.string ?: "") }.getOrDefault(AuthStyle.BEARER),
+                authHeaderName = v["authHeaderName"]?.string,
+                extraHeaders = v["extraHeaders"]?.obj?.fields?.mapValues { it.value.string ?: "" } ?: emptyMap(),
+                contextWindow = v["contextWindow"]?.int,
+                supportsVision = v["supportsVision"]?.bool ?: false,
+                supportsTools = v["supportsTools"]?.bool ?: false,
+                supportsStreaming = v["supportsStreaming"]?.bool ?: true,
+                tier = runCatching { CapabilityTier.valueOf(v["tier"]?.string ?: "") }.getOrDefault(CapabilityTier.STANDARD),
+                freeTier = runCatching { FreeTier.valueOf(v["freeTier"]?.string ?: "") }.getOrDefault(FreeTier.UNKNOWN),
+                rateLimitNote = v["rateLimitNote"]?.string,
+                dailyRequestLimit = v["dailyRequestLimit"]?.int,
+                temperature = v["temperature"]?.number,
+                maxOutputTokens = v["maxOutputTokens"]?.int,
+                enabled = v["enabled"]?.bool ?: true,
+                dataPolicyAcknowledged = v["dataPolicyAcknowledged"]?.bool ?: false,
+            )
+        }
+    }
+}

@@ -1,0 +1,19 @@
+{
+  "id": "dark_mode",
+  "name": "Dark mode",
+  "description": "Opens Display settings and toggles the dark theme.",
+  "tools": [
+    {
+      "name": "toggle_dark_mode",
+      "description": "Toggle Android's dark theme via the Settings app.",
+      "steps": [
+        { "do": "open_app", "package": "com.android.settings" },
+        { "do": "wait", "ms": 1200 },
+        { "do": "tap_text", "text": "Display" },
+        { "do": "wait", "ms": 900 },
+        { "do": "expect_text", "text": "Dark theme" },
+        { "do": "tap_text", "text": "Dark theme" }
+      ]
+    }
+  ]
+}

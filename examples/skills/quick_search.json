@@ -1,0 +1,15 @@
+{
+  "id": "quick_search",
+  "name": "Quick search",
+  "description": "Opens a web search for a phrase in the browser.",
+  "tools": [
+    {
+      "name": "browser_search",
+      "description": "Open the browser on a search for the given phrase.",
+      "params": { "phrase": "What to search for" },
+      "steps": [
+        { "do": "open_url", "url": "https://duckduckgo.com/?q={{phrase}}" }
+      ]
+    }
+  ]
+}

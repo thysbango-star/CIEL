@@ -1,0 +1,45 @@
+[versions]
+agp = "8.7.3"
+kotlin = "2.1.0"
+ksp = "2.1.0-1.0.29"
+coroutines = "1.9.0"
+composeBom = "2024.12.01"
+activityCompose = "1.9.3"
+lifecycle = "2.8.7"
+navigation = "2.8.5"
+room = "2.6.1"
+datastore = "1.1.1"
+coreKtx = "1.15.0"
+vosk = "0.3.47"
+jna = "5.13.0"
+
+[libraries]
+coroutines-core = { module = "org.jetbrains.kotlinx:kotlinx-coroutines-core", version.ref = "coroutines" }
+coroutines-android = { module = "org.jetbrains.kotlinx:kotlinx-coroutines-android", version.ref = "coroutines" }
+core-ktx = { module = "androidx.core:core-ktx", version.ref = "coreKtx" }
+activity-compose = { module = "androidx.activity:activity-compose", version.ref = "activityCompose" }
+lifecycle-runtime = { module = "androidx.lifecycle:lifecycle-runtime-ktx", version.ref = "lifecycle" }
+lifecycle-runtime-compose = { module = "androidx.lifecycle:lifecycle-runtime-compose", version.ref = "lifecycle" }
+lifecycle-viewmodel-compose = { module = "androidx.lifecycle:lifecycle-viewmodel-compose", version.ref = "lifecycle" }
+lifecycle-service = { module = "androidx.lifecycle:lifecycle-service", version.ref = "lifecycle" }
+navigation-compose = { module = "androidx.navigation:navigation-compose", version.ref = "navigation" }
+compose-bom = { module = "androidx.compose:compose-bom", version.ref = "composeBom" }
+compose-ui = { module = "androidx.compose.ui:ui" }
+compose-ui-graphics = { module = "androidx.compose.ui:ui-graphics" }
+compose-ui-tooling-preview = { module = "androidx.compose.ui:ui-tooling-preview" }
+compose-ui-tooling = { module = "androidx.compose.ui:ui-tooling" }
+compose-material3 = { module = "androidx.compose.material3:material3" }
+compose-material-icons = { module = "androidx.compose.material:material-icons-extended" }
+room-runtime = { module = "androidx.room:room-runtime", version.ref = "room" }
+room-ktx = { module = "androidx.room:room-ktx", version.ref = "room" }
+room-compiler = { module = "androidx.room:room-compiler", version.ref = "room" }
+datastore-preferences = { module = "androidx.datastore:datastore-preferences", version.ref = "datastore" }
+vosk-android = { module = "com.alphacephei:vosk-android", version.ref = "vosk" }
+jna = { module = "net.java.dev.jna:jna", version.ref = "jna" }
+
+[plugins]
+android-application = { id = "com.android.application", version.ref = "agp" }
+kotlin-android = { id = "org.jetbrains.kotlin.android", version.ref = "kotlin" }
+kotlin-jvm = { id = "org.jetbrains.kotlin.jvm", version.ref = "kotlin" }
+kotlin-compose = { id = "org.jetbrains.kotlin.plugin.compose", version.ref = "kotlin" }
+ksp = { id = "com.google.devtools.ksp", version.ref = "ksp" }

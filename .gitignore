@@ -1,0 +1,21 @@
+# Build
+.gradle/
+build/
+**/build/
+captures/
+.externalNativeBuild/
+.cxx/
+*.apk
+*.aab
+
+# IDE
+.idea/
+*.iml
+.DS_Store
+
+# Local configuration and SECRETS — never commit
+local.properties
+keystore.properties
+*.jks
+*.keystore
+.env

@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">Ciel</string>
+    <string name="accessibility_label">Ciel screen control</string>
+    <string name="accessibility_description">Lets Ciel read what is on screen and tap, type and scroll on your behalf — only for tasks you ask for. Purchases, sending messages, deleting and security changes always ask for your confirmation first, and the floating STOP button or saying \"Ciel, stop\" halts everything immediately. Ciel cannot solve CAPTCHAs or bypass app security. Screen content is sent to your configured AI provider only while an automation task is running.</string>
+    <string name="notification_listener_label">Ciel message summaries</string>
+    <string name="tile_label">Ask Ciel</string>
+</resources>
