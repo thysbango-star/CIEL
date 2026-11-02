@@ -28,6 +28,15 @@ android {
     }
 
     signingConfigs {
+        // A fixed debug key committed to the repo (debug keys are not secret). Without it every CI
+        // run signs with a new random key, and Android refuses to install the update over the
+        // previous build ("App not installed" / "package conflicts").
+        getByName("debug") {
+            storeFile = file("debug.keystore")
+            storePassword = "android"
+            keyAlias = "androiddebugkey"
+            keyPassword = "android"
+        }
         val storeFilePath = signingValue("storeFile", "CIEL_KEYSTORE_PATH")
         if (storeFilePath != null) {
             create("release") {
