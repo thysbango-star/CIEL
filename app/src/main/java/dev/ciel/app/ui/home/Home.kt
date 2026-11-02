@@ -255,6 +255,7 @@ fun SageHome(m: HomeModel, actions: HomeActions, modifier: Modifier = Modifier) 
             } else BoxWithConstraints(Modifier.fillMaxSize()) {
                 // The crystal takes what the screen can spare: never pushes the controls off-screen.
                 val crystal = minOf(280.dp, maxHeight * 0.58f, maxWidth * 0.85f)
+                val shortScreen = maxHeight < 420.dp
                 Column(Modifier.fillMaxSize(), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.Center) {
                     Visual(m, actions, crystal)
                     Spacer(Modifier.height(12.dp))
@@ -271,7 +272,7 @@ fun SageHome(m: HomeModel, actions: HomeActions, modifier: Modifier = Modifier) 
                     Box(Modifier.fillMaxWidth().background(CielColors.Panel, glass).border(1.dp, CielColors.PanelBorder, glass)
                         .clickable { typing = true }.padding(horizontal = 18.dp, vertical = 12.dp).animateContentSize(tween(220)), contentAlignment = Alignment.Center) {
                         Text(line, style = MaterialTheme.typography.bodyLarge, color = CielColors.Text, textAlign = TextAlign.Center,
-                            maxLines = if (maxHeight < 420.dp) 2 else 4, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis)
+                            maxLines = if (shortScreen) 2 else 4, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis)
                     }
                 }
             }

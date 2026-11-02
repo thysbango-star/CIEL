@@ -1,6 +1,7 @@
 @file:OptIn(androidx.compose.foundation.layout.ExperimentalLayoutApi::class)
 package dev.ciel.app.ui.screens
 
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.FlowRow
 
 import androidx.compose.foundation.layout.Arrangement

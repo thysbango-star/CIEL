@@ -33,6 +33,7 @@ import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardCapitalization
 import kotlinx.coroutines.launch
 import androidx.compose.foundation.border
+import androidx.compose.animation.core.animateFloat
 import androidx.compose.ui.draw.drawBehind
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
