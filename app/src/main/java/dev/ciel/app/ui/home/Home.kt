@@ -22,6 +22,12 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Stop
+import androidx.compose.material.icons.filled.Keyboard
+import androidx.compose.material.icons.filled.Mic
+import androidx.compose.material.icons.filled.Inventory2
+import androidx.compose.material.icons.filled.BarChart
+import androidx.compose.material.icons.filled.GridView
+import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Icon
@@ -212,7 +218,7 @@ fun SageHome(m: HomeModel, actions: HomeActions, modifier: Modifier = Modifier) 
             }
             Column(horizontalAlignment = Alignment.CenterHorizontally) {
                 androidx.compose.material3.IconButton(onClick = { actions.onOpen("settings") }) {
-                    androidx.compose.material3.Icon(androidx.compose.material.icons.Icons.Filled.Settings, "Settings", tint = CielColors.Text)
+                    androidx.compose.material3.Icon(Icons.Filled.Settings, "Settings", tint = CielColors.Text)
                 }
                 Box(Modifier.size(46.dp).border(1.dp, CielColors.PanelBorder, androidx.compose.foundation.shape.CircleShape)
                     .clickable { actions.onOpen("floating") }, contentAlignment = Alignment.Center) {
@@ -250,10 +256,10 @@ fun SageHome(m: HomeModel, actions: HomeActions, modifier: Modifier = Modifier) 
         Spacer(Modifier.height(10.dp))
         // Bottom row: skills, tasks, memory, type
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceEvenly) {
-            SageIcon(androidx.compose.material.icons.Icons.Filled.GridView, "Skills") { actions.onOpen("skills") }
-            SageIcon(androidx.compose.material.icons.Icons.Filled.BarChart, "Tasks") { actions.onOpen("tasks") }
-            SageIcon(androidx.compose.material.icons.Icons.Filled.Inventory2, "Memory") { actions.onOpen("memory") }
-            SageIcon(if (typing) androidx.compose.material.icons.Icons.Filled.Mic else androidx.compose.material.icons.Icons.Filled.Keyboard, if (typing) "Voice" else "Type") { typing = !typing }
+            SageIcon(Icons.Filled.GridView, "Skills") { actions.onOpen("skills") }
+            SageIcon(Icons.Filled.BarChart, "Tasks") { actions.onOpen("tasks") }
+            SageIcon(Icons.Filled.Inventory2, "Memory") { actions.onOpen("memory") }
+            SageIcon(if (typing) Icons.Filled.Mic else Icons.Filled.Keyboard, if (typing) "Voice" else "Type") { typing = !typing }
         }
     }
 }
