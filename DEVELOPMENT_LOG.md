@@ -1,5 +1,11 @@
 # Development log
 
+## Milestone 4 — 2026-11-02 (v0.4)
+- UI overhaul: root causes and fixes in docs/UI_GUIDELINES.md (double inset padding + fixed-size layouts behind the keyboard; preview `requiredSize` shift; fixed rows and dialog heights).
+- Animation: `MotionClock` integrates phases with eased speeds; verified numerically (2 h simulated with state changes every 7 s: max per-frame ring movement 2.5°, no jumps).
+- Game Intelligence for Cookie Run: Kingdom; diagnosis in docs/GAME_INTELLIGENCE.md. 66/66 core tests, including a full simulated run (plan → steps → learned route → partial report).
+- **Not verified on a real phone or against the real game.** Keyboard behaviour differs between keyboards/devices; OCR on the game's fonts and the game's real menus are untested.
+
 ## Milestone 3 — 2026-11-02 (v0.3)
 - Implemented and CI-built: crystal core + 8 themes, Hey Ciel hardening and diagnostics, Tasks tab, voice UI commands, memory backup.
 - Hey Ciel review found: model loaded on the main thread (could stall/kill the service), status could claim "Listening" without capture, no recovery on mic errors, no visibility into what the engine heard. All fixed; **Test Hey Ciel** shows each link in the chain.

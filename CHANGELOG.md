@@ -1,5 +1,24 @@
 # Changelog
 
+## 0.4.0 — 2026-11-02
+
+### Fixed
+- **Keyboard**: the chat input stays directly above the keyboard on every device (insets applied once; bottom bar hides while typing). The input grows with the text, then scrolls inside; the keyboard's Send key sends; unsent text is kept. Chat stays on the newest message unless you scroll up ("latest" button).
+- **Theme selector**: all 8 themes are complete cards in an adaptive grid (name, live preview, colours, description, selected badge, Preview, Apply). Full-screen preview (Home / Chat / Floating / Voice). Previews no longer shift or clip.
+- Rows of chips/buttons wrap on small screens; dialogs fit the screen with the keyboard open; Floating Ciel stays on screen.
+- Animations loop seamlessly: no jumps on state changes or after long running; effects fade in and out. Smooth screen transitions, crystal resizing, status cross-fades, mic halo.
+
+### Added — Game Intelligence (see docs/GAME_INTELLIGENCE.md)
+- Cookie Run: Kingdom profile; objective planner (daily quests, collect rewards, check/upgrade buildings, production, improve kingdom, explore & learn).
+- Screen understanding with confidence (on-device text reading, image fingerprints, several observations), recovery from loading / connection errors, honest stops for login, maintenance, updates and human checks.
+- Learned knowledge base with confidence, routes, landmarks, re-checking after game updates; view, search, forget and clear it.
+- Spending rules: premium currency, upgrades, production, auto-claim, reserve. Real money always asks.
+- **Floating activity notch** above the game: current action, real step progress, status; Pause/Resume, Stop, Ask Ciel, View task.
+- Ask questions while Ciel plays without stopping her; clarifications pause only the affected action.
+
+### Tests
+- 66 core tests (11 new for game intelligence).
+
 ## 0.3.0 — 2026-11-02
 
 ### Added

@@ -63,4 +63,4 @@ testing/          Test suite for all pure-Kotlin modules
 app/              Android app: Compose UI, Keystore, Room, voice, accessibility, overlay
 ```
 
-Docs: [ARCHITECTURE](ARCHITECTURE.md) · [BUILDING](BUILDING.md) · [API_SETUP](API_SETUP.md) · [PERMISSIONS](PERMISSIONS.md) · [TESTING](TESTING.md) · [CHANGELOG](CHANGELOG.md) · [CONTRIBUTING](CONTRIBUTING.md)
+Docs: [ARCHITECTURE](ARCHITECTURE.md) · [BUILDING](BUILDING.md) · [API_SETUP](API_SETUP.md) · [PERMISSIONS](PERMISSIONS.md) · [TESTING](TESTING.md) · [CHANGELOG](CHANGELOG.md) · [CONTRIBUTING](CONTRIBUTING.md) · [Game Intelligence](docs/GAME_INTELLIGENCE.md) · [UI guidelines](docs/UI_GUIDELINES.md)
