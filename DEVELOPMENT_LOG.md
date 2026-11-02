@@ -1,12 +1,18 @@
 # Development log
 
+## Milestone 1.1 — 2026-11-02 (first CI build)
+- Repository pushed to GitHub (thysbango-star/CIEL). First GitHub Actions run **passed**:
+  core tests 45/45 under Gradle, `:app:assembleDebug` BUILD SUCCESSFUL (debug APK ≈30 MB), lint completed.
+- The Android app therefore compiles as written; it has **not yet run on a real phone**.
+- Fixed: a cancelled voice turn now hands the microphone back to the wake word.
+- Next: install the APK and work through TESTING.md's device checklist.
+
 ## Milestone 1 — 2026-11-02
 
 ### Environment
 The development sandbox could reach GitHub but **not** Google Maven, Maven Central or the Gradle plugin portal, and had no Android SDK. Consequences:
 - The nine pure-Kotlin modules were compiled with the Kotlin 2.2 compiler (downloaded from GitHub releases) and tested with the bundled kotlinx-coroutines — **45/45 tests pass**.
-- The Android `app` module was written against Android API 35 / AndroidX / Compose but **has not yet been compiled**. The first GitHub Actions run (or Android Studio sync) is the first compilation; expect a small number of compile fixes. Gradle build files have likewise not been executed.
-- No APK has been produced yet. CI is configured to produce the debug APK automatically.
+- The Android `app` module could not be compiled in the sandbox; it was first compiled by GitHub Actions (see milestone 1.1).
 
 ### Implemented and tested (automated, JVM)
 - JSON, HTTP transport (incl. real local-server streaming), secret redaction.
