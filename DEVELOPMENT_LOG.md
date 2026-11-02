@@ -1,5 +1,11 @@
 # Development log
 
+## Milestone 3 — 2026-11-02 (v0.3)
+- Implemented and CI-built: crystal core + 8 themes, Hey Ciel hardening and diagnostics, Tasks tab, voice UI commands, memory backup.
+- Hey Ciel review found: model loaded on the main thread (could stall/kill the service), status could claim "Listening" without capture, no recovery on mic errors, no visibility into what the engine heard. All fixed; **Test Hey Ciel** shows each link in the chain.
+- Not verified on a real phone yet. Known limits: say "Hey Ciel", wait for the chime, then speak; the offline English model has no word "Ciel" (similar words accepted); after a reboot open Ciel once (Android 14 rule).
+- Not yet implemented from the master prompt: daily briefing, initiative levels/suggestions, conversation search/rename/archive, file-management / calendar / coding skills, encrypted database, full backup & restore of settings, wake-word engine with a custom-trained "Ciel" model.
+
 ## Milestone 2 — 2026-11-02 (redesign)
 - Implemented: Hey Ciel (wake phrases, one-tap setup, voice panel, offline fallback), one-step connections, four designs + picker, new navigation, conversations, onboarding.
 - Tested: 52/52 core tests (incl. key detection, model choice, connection fallback); CI build of the Android app passed; APK published.

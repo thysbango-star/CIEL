@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.3.0 — 2026-11-02
+
+### Added
+- **Ciel's crystal**: the supplied glowing core image (made transparent, tinted per theme) inside orbital rings. Distinct idle, listening (ripples + voice wave), thinking (fast rings + symbols), analysing (data orbit), executing (energy trail + progress arc), speaking (pulse), error and offline (dimmed) states. Also used by Floating Ciel and the Hey Ciel panel.
+- **8 themes**: Azure Calm (default), Ethereal Light, Void Minimal, Twilight Sage, Nature's Wisdom, Divine Light, Starfall, Glassmorphism — palette, background, particles and crystal tint. Controls for glow, particles, ring speed, panel transparency, animation level and floating size. The 4 layouts remain; Great Sage (default) rebuilt after the reference sheet.
+- **Hey Ciel reliability**: model loads off the main thread; health shows only what's real; automatic recovery from microphone errors; sensitivity (Low/Normal/High); "Ciel" alone on/off; **Test Hey Ciel** diagnostic (permission, notifications, model, battery optimisation, service, microphone signal, live wake-word test showing what was heard).
+- **Tasks tab**: new task with app/game picker, templates, queue (Queued state), pause/resume, cancel, run again, plan and result details, history filters, action log, autonomy limits (max steps, time limit), finish notifications.
+- **Voice commands for Ciel herself**: "open tasks / chats / memory / skills / connections", "go home", "switch to Twilight Sage", "switch to Raphael layout", "stop talking", "repeat that", "what are you doing?".
+- **Memory export / import** (JSON; imports re-check the sensitive-data filter).
+
+### Optimised
+- Theme backgrounds are drawn once and cached; the floating crystal redraws ~15×/s when idle; sliders save when released; voice model loading no longer blocks the UI.
+
+### Tests
+- 55 core tests (new: pause/resume, task queue, memory backup).
+
 ## 0.2.0 — 2026-11-02 — Redesign
 
 ### Added
