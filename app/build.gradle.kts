@@ -22,8 +22,8 @@ android {
         applicationId = "dev.ciel.app"
         minSdk = 26
         targetSdk = 35
-        versionCode = 3
-        versionName = "0.3.0"
+        versionCode = 4
+        versionName = "0.4.0"
         vectorDrawables { useSupportLibrary = true }
     }
 
@@ -108,4 +108,7 @@ dependencies {
     // "@aar" without transitive deps, as documented by Vosk, so JNA comes only as its Android AAR.
     implementation("com.alphacephei:vosk-android:${libs.versions.vosk.get()}@aar")
     implementation("net.java.dev.jna:jna:${libs.versions.jna.get()}@aar")
+
+    // On-device text recognition for games (offline, bundled Latin model; nothing is uploaded).
+    implementation(libs.mlkit.text)
 }

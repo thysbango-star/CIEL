@@ -1,6 +1,5 @@
 package dev.ciel.app.overlay
 
-import android.animation.ValueAnimator
 import android.annotation.SuppressLint
 import android.app.PendingIntent
 import android.app.Service
@@ -23,7 +22,6 @@ import android.view.Gravity
 import android.view.MotionEvent
 import android.view.View
 import android.view.WindowManager
-import android.view.animation.LinearInterpolator
 import android.widget.Button
 import android.widget.LinearLayout
 import android.widget.TextView
@@ -85,7 +83,8 @@ class OrbView(context: Context) : View(context) {
             corePaint.colorFilter = android.graphics.ColorMatrixColorFilter(android.graphics.ColorMatrix(dev.ciel.app.design.CrystalTint.matrix(value)))
             invalidate()
         }
-    private var angle = 0f
+    private val clock = dev.ciel.app.design.MotionClock()
+    private var lastFrame = 0L
     private val ring = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.STROKE }
     private val fill = Paint(Paint.ANTI_ALIAS_FLAG)
     private val corePaint = Paint(Paint.ANTI_ALIAS_FLAG or Paint.FILTER_BITMAP_FLAG).apply {
@@ -93,47 +92,56 @@ class OrbView(context: Context) : View(context) {
     }
     private val core: android.graphics.Bitmap? = coreBitmap(context)
     private val dst = android.graphics.RectF()
-    private val animator = ValueAnimator.ofFloat(0f, 360f).apply {
-        duration = 9000; repeatCount = ValueAnimator.INFINITE; interpolator = LinearInterpolator()
-        addUpdateListener { angle = it.animatedValue as Float; invalidate() }
-    }
     private var attached = false
+    /** Eased colour so state changes blend instead of switching. */
+    private var shownColor = 0
 
-    override fun onAttachedToWindow() { super.onAttachedToWindow(); attached = true; updateAnimation() }
-    override fun onDetachedFromWindow() { attached = false; animator.cancel(); super.onDetachedFromWindow() }
+    override fun onAttachedToWindow() { super.onAttachedToWindow(); attached = true; lastFrame = 0L; invalidate() }
+    override fun onDetachedFromWindow() { attached = false; super.onDetachedFromWindow() }
 
-    private fun updateAnimation() {
-        if (!attached) return
-        if (state == CielState.IDLE) { if (animator.isRunning) animator.pause() }
-        else if (animator.isPaused) animator.resume() else if (!animator.isStarted) animator.start()
-    }
+    private fun updateAnimation() { lastFrame = 0L; invalidate() }
 
     override fun onDraw(canvas: Canvas) {
-        val c = if (state == CielState.IDLE) palette.accent else StateColors.of(state)
+        // Seamless motion (see MotionClock): phases advance with real frame time; speeds ease.
+        val now = System.nanoTime()
+        val dt = if (lastFrame == 0L) 0.0 else (now - lastFrame) / 1e9
+        lastFrame = now
+        val active = state != CielState.IDLE
+        val ringTarget = 0.05 * when (state) { CielState.PROCESSING, CielState.ANALYSING, CielState.RESEARCHING, CielState.EXECUTING -> 3.0; CielState.LISTENING -> 2.0; else -> 1.0 }
+        val pulseTarget = if (state == CielState.LISTENING || state == CielState.SPEAKING) 1.2 else 0.19
+        clock.advance(dt, ringTarget, pulseTarget)
+        // Idle: ~30 fps is smooth for slow motion and saves battery; active: every vsync.
+        if (attached) { if (active) postInvalidateOnAnimation() else postInvalidateDelayed(33) }
+
+        val target = if (state == CielState.IDLE) palette.accent else StateColors.of(state)
+        shownColor = if (shownColor == 0) target else blend(shownColor, target, (dt / 0.35).coerceIn(0.0, 1.0).toFloat())
+        val c = shownColor
         val cx = width / 2f; val cy = height / 2f; val r = minOf(cx, cy) * 0.95f
-        if (state == CielState.IDLE && attached) { angle = (angle + 0.6f) % 360f; postInvalidateDelayed(66) }
-        val speed = when (state) { CielState.PROCESSING, CielState.ANALYSING, CielState.RESEARCHING, CielState.EXECUTING -> 3f; CielState.LISTENING -> 2f; else -> 1f }
-        val a = angle * speed
-        val pulse = if (state == CielState.LISTENING || state == CielState.SPEAKING) (0.92f + 0.08f * sin(Math.toRadians(a * 4.0)).toFloat()) else 1f
+        val ringDeg = dev.ciel.app.design.MotionClock.degrees(clock.ring)
+        val pulseAmp = if (state == CielState.LISTENING || state == CielState.SPEAKING) 0.06f else 0.02f
+        val pulse = 1f + pulseAmp * dev.ciel.app.design.MotionClock.wave(clock.pulse)
         // Soft aura
         fill.shader = RadialGradient(cx, cy, r, intArrayOf(Color.argb(110, Color.red(c), Color.green(c), Color.blue(c)), Color.TRANSPARENT), null, Shader.TileMode.CLAMP)
         canvas.drawCircle(cx, cy, r, fill)
         ring.color = c; ring.strokeWidth = r * 0.035f
         when (design) {
-            CielDesign.RAPHAEL -> { ring.alpha = 220; polygon(canvas, cx, cy, r * 0.92f, 6, a * 0.5) }
+            CielDesign.RAPHAEL -> { ring.alpha = 220; polygon(canvas, cx, cy, r * 0.92f, 6, ringDeg.toDouble()) }
             CielDesign.CIEL -> {
                 ring.alpha = 220; canvas.drawCircle(cx, cy, r * 0.92f, ring)
                 for (i in 0 until 12) {
-                    val t = Math.toRadians((a + i * 30).toDouble())
+                    val t = Math.toRadians((ringDeg + i * 30).toDouble())
                     canvas.drawLine(cx + (r * 0.8f * cos(t)).toFloat(), cy + (r * 0.8f * sin(t)).toFloat(), cx + (r * 0.9f * cos(t)).toFloat(), cy + (r * 0.9f * sin(t)).toFloat(), ring)
                 }
             }
             else -> {
-                // Two tilted orbital ellipses like the main crystal.
+                // Two tilted orbital ellipses like the main crystal; each with a travelling light.
                 ring.alpha = 170
                 for ((i, tilt) in listOf(-18f, 40f).withIndex()) {
-                    canvas.save(); canvas.rotate(tilt + a * 0.1f * (if (i == 0) 1 else -1), cx, cy)
+                    canvas.save(); canvas.rotate(tilt + 5f * dev.ciel.app.design.MotionClock.wave(clock.drift * (i + 2)), cx, cy)
                     canvas.drawOval(cx - r * 0.95f, cy - r * 0.3f, cx + r * 0.95f, cy + r * 0.3f, ring)
+                    val ang = Math.toRadians(dev.ciel.app.design.MotionClock.degrees(clock.ring, 3 + i).toDouble() * (if (i == 0) 1 else -1))
+                    fill.shader = null; fill.color = Color.WHITE; fill.alpha = 230
+                    canvas.drawCircle(cx + (r * 0.95f * cos(ang)).toFloat(), cy + (r * 0.3f * sin(ang)).toFloat(), r * 0.06f, fill)
                     canvas.restore()
                 }
             }
@@ -141,7 +149,7 @@ class OrbView(context: Context) : View(context) {
         // Crystal core image
         val coreR = r * 0.62f * pulse
         if (core != null) {
-            canvas.save(); canvas.rotate(a * 0.3f, cx, cy)
+            canvas.save(); canvas.rotate(dev.ciel.app.design.MotionClock.degrees(clock.drift), cx, cy)
             dst.set(cx - coreR, cy - coreR, cx + coreR, cy + coreR)
             canvas.drawBitmap(core, null, dst, corePaint)
             canvas.restore()
@@ -150,6 +158,12 @@ class OrbView(context: Context) : View(context) {
             canvas.drawCircle(cx, cy, coreR, fill)
         }
     }
+
+    private fun blend(from: Int, to: Int, t: Float): Int = Color.argb(
+        (Color.alpha(from) + (Color.alpha(to) - Color.alpha(from)) * t).toInt(),
+        (Color.red(from) + (Color.red(to) - Color.red(from)) * t).toInt(),
+        (Color.green(from) + (Color.green(to) - Color.green(from)) * t).toInt(),
+        (Color.blue(from) + (Color.blue(to) - Color.blue(from)) * t).toInt())
 
     private fun polygon(canvas: Canvas, cx: Float, cy: Float, radius: Float, sides: Int, rotationDeg: Double) {
         val path = android.graphics.Path()
@@ -216,7 +230,8 @@ class FloatingCielService : Service() {
             layoutParams = LinearLayout.LayoutParams(px, px)
             contentDescription = "Ciel. Tap to expand, double-tap for emergency stop, long-press to open."
         }
-        val text = TextView(this).apply { setTextColor(Color.rgb(220, 248, 255)); textSize = 14f; maxLines = 7 }
+        // Long replies scroll inside the card instead of growing it off-screen.
+        val text = TextView(this).apply { setTextColor(Color.rgb(220, 248, 255)); textSize = 14f; maxLines = 7; isVerticalScrollBarEnabled = true; movementMethod = android.text.method.ScrollingMovementMethod() }
         val confirmBox = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; visibility = View.GONE }
         fun button(label: String, color: Int, onClick: () -> Unit) = Button(this).apply {
             this.text = label; setTextColor(Color.WHITE); isAllCaps = false
@@ -235,7 +250,9 @@ class FloatingCielService : Service() {
             visibility = View.GONE
             setPadding((14 * dp).toInt(), (12 * dp).toInt(), (14 * dp).toInt(), (12 * dp).toInt())
             background = GradientDrawable().apply { cornerRadius = 18 * dp; setColor(Color.argb(235, 8, 18, 38)); setStroke((1 * dp).toInt(), Color.argb(200, 92, 225, 255)) }
-            layoutParams = LinearLayout.LayoutParams((280 * dp).toInt(), LinearLayout.LayoutParams.WRAP_CONTENT).apply { topMargin = (6 * dp).toInt() }
+            // Never wider than the screen (small phones, split screen).
+            val screenW = resources.displayMetrics.widthPixels
+            layoutParams = LinearLayout.LayoutParams(minOf((280 * dp).toInt(), screenW - (32 * dp).toInt()), LinearLayout.LayoutParams.WRAP_CONTENT).apply { topMargin = (6 * dp).toInt() }
             addView(text); addView(confirmBox); addView(buttons)
         }
         val container = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; addView(orb); addView(card) }
@@ -244,10 +261,23 @@ class FloatingCielService : Service() {
         params = WindowManager.LayoutParams(
             WindowManager.LayoutParams.WRAP_CONTENT, WindowManager.LayoutParams.WRAP_CONTENT,
             WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
-            WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS,
+            WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE,
             PixelFormat.TRANSLUCENT,
         ).apply { gravity = Gravity.TOP or Gravity.START; x = (16 * dp).toInt(); y = (220 * dp).toInt() }
 
+        // Keeps the orb and its card fully on screen (also after expanding near an edge).
+        fun clamp(force: Boolean = false) {
+            val m = resources.displayMetrics
+            val w = container.width.takeIf { it > 0 } ?: return
+            val h = container.height
+            val top = (24 * dp).toInt()
+            val nx = params.x.coerceIn(0, maxOf(0, m.widthPixels - w))
+            val ny = params.y.coerceIn(top, maxOf(top, m.heightPixels - h - (24 * dp).toInt()))
+            if (nx == params.x && ny == params.y && !force) return
+            params.x = nx; params.y = ny
+            runCatching { wm.updateViewLayout(container, params) }
+        }
+        container.addOnLayoutChangeListener { _, _, _, _, _, _, _, _, _ -> container.post { clamp() } }
         val detector = GestureDetector(this, object : GestureDetector.SimpleOnGestureListener() {
             override fun onDown(e: MotionEvent) = true
             override fun onSingleTapConfirmed(e: MotionEvent): Boolean { card.visibility = if (card.visibility == View.VISIBLE) View.GONE else View.VISIBLE; return true }
@@ -267,7 +297,7 @@ class FloatingCielService : Service() {
                     if (dragging || dx * dx + dy * dy > 400) {
                         dragging = true
                         params.x = startX + dx.toInt(); params.y = startY + dy.toInt()
-                        runCatching { wm.updateViewLayout(container, params) }
+                        clamp(force = true)
                     }
                 }
             }

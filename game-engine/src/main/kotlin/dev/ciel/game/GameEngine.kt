@@ -16,6 +16,13 @@ import dev.ciel.task.AgentOptions
 import dev.ciel.task.AgentRun
 import dev.ciel.task.DeviceAction
 import dev.ciel.task.ScreenAgent
+import dev.ciel.task.ConfirmationGate
+import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.update
+import kotlinx.coroutines.withContext
 
 enum class GameCategory { RPG, STRATEGY, SIMULATION, ADVENTURE, CASUAL, PUZZLE, MANAGEMENT, OTHER }
 
@@ -52,6 +59,10 @@ data class GameProfile(
     /** Set when the installed version differs from the version the knowledge was learned on. */
     val interfaceChangeSuspected: Boolean = false,
     val updatedAt: Long = System.currentTimeMillis(),
+    /** Learned, searchable knowledge with confidence (Game Intelligence). */
+    val knowledge: GameKnowledgeBase = GameKnowledgeBase(),
+    /** The user's rules for spending in-game resources. */
+    val spending: SpendingPolicy = SpendingPolicy(),
 ) {
     fun knowledgeSummary(): String = buildString {
         append("Game: $name ($packageName), category ${category.name.lowercase()}, version ${versionName ?: "unknown"}.\n")
@@ -97,6 +108,8 @@ object GameProfileCodec {
         "knownScreens" to p.knownScreens; "navigationNotes" to p.navigationNotes; "mechanics" to p.mechanics
         "questStructure" to p.questStructure; "supportedActions" to p.supportedActions; "limitations" to p.limitations
         "interfaceChangeSuspected" to p.interfaceChangeSuspected; "updatedAt" to p.updatedAt
+        "knowledge" to p.knowledge.entries.map { GameKnowledgeBase.encode(it) }
+        "spending" to SpendingPolicy.encode(p.spending)
         "strategies" to p.strategies.map { s ->
             json { "objective" to s.objective; "steps" to s.steps; "successCount" to s.successCount; "failureCount" to s.failureCount; opt("gameVersion", s.gameVersion); "lastUsed" to s.lastUsed }
         }
@@ -124,6 +137,9 @@ object GameProfileCodec {
             supportedActions = list("supportedActions"), limitations = list("limitations"),
             interfaceChangeSuspected = o["interfaceChangeSuspected"]?.bool ?: false,
             updatedAt = o["updatedAt"]?.long ?: System.currentTimeMillis(),
+            knowledge = GameKnowledgeBase(o["knowledge"]?.array?.mapNotNull { GameKnowledgeBase.decode(it, imported = !trustPolicy) } ?: emptyList()),
+            // Spending rules are personal: shared profiles never carry them.
+            spending = if (trustPolicy) SpendingPolicy.decode(o["spending"]) else SpendingPolicy(),
             strategies = o["strategies"]?.array?.map { s ->
                 VerifiedStrategy(s["objective"]?.string ?: "", s["steps"]?.array?.mapNotNull { it.string } ?: emptyList(),
                     s["successCount"]?.int ?: 0, s["failureCount"]?.int ?: 0, s["gameVersion"]?.string, s["lastUsed"]?.long ?: 0)
@@ -143,18 +159,35 @@ class GameEngine(
     private val agentFactory: () -> ScreenAgent?,
     /** Whether screenshots may be sent to the vision model (user setting). */
     private val screenshotsAllowed: () -> Boolean = { true },
+    /** Explicit approvals (premium currency, real money). Defaults to "no". */
+    private val confirmations: ConfirmationGate = ConfirmationGate { false },
+    /** Answers questions about a running task (AI model); null → answers from local state. */
+    var answerer: TaskQuestionAnswerer? = null,
 ) {
+    private val _activity = MutableStateFlow<GameActivity?>(null)
+    /** Live status for the activity notch: comes only from the running engine. */
+    val activity: StateFlow<GameActivity?> = _activity.asStateFlow()
+    private val channels = java.util.concurrent.ConcurrentHashMap<String, TaskChannel>()
+    private val sessions = java.util.concurrent.ConcurrentHashMap<String, GameSessionState>()
+    fun channel(taskId: String): TaskChannel? = channels[taskId]
+    /** The task the notch is showing, if any. */
+    fun currentChannel(): TaskChannel? = _activity.value?.let { channels[it.taskId] }
+    fun dismissActivity() { _activity.value = _activity.value?.takeIf { it.status == GameActivity.Status.RUNNING || it.status == GameActivity.Status.WAITING || it.status == GameActivity.Status.PAUSED } }
+    fun markPaused(paused: Boolean) = _activity.update { it?.copy(status = if (paused) GameActivity.Status.PAUSED else GameActivity.Status.RUNNING) }
+
     /** Loads or creates a profile and flags interface changes after game updates. */
     suspend fun profileFor(packageName: String): GameProfile {
         val installedVersion = packages.versionName(packageName)
         val existing = profiles.get(packageName)
         if (existing == null) {
-            val p = GameProfile(packageName, packages.label(packageName) ?: packageName, versionName = installedVersion)
+            val p = GameCatalog.seed(GameProfile(packageName, packages.label(packageName) ?: packageName, versionName = installedVersion))
             profiles.save(p)
             return p
         }
         if (installedVersion != null && existing.versionName != null && installedVersion != existing.versionName) {
-            val updated = existing.copy(versionName = installedVersion, interfaceChangeSuspected = true, updatedAt = System.currentTimeMillis())
+            // Never assume an element is still where it was: everything learned gets re-checked.
+            val updated = existing.copy(versionName = installedVersion, interfaceChangeSuspected = true, updatedAt = System.currentTimeMillis(),
+                knowledge = existing.knowledge.onGameUpdated(installedVersion))
             profiles.save(updated)
             return updated
         }
@@ -179,6 +212,115 @@ class GameEngine(
         val run = agent.run(handle, "In ${profile.name}: $objective", AgentOptions(maxSteps = maxSteps, includeScreenshots = screenshotsAllowed(), settleDelayMs = 1500, knowledge = knowledge))
         learn(profile, objective, run)
         return PlayOutcome(run, run.result.report)
+    }
+
+    /**
+     * Game Intelligence run (Parts 1–14): objective → prioritised plan → each step executed by the
+     * screen agent through [GamePlannerDecorator] (screen understanding, recovery, spending rules,
+     * non-blocking questions) → learning from every action → honest report.
+     */
+    suspend fun runObjective(packageName: String, objective: String, handle: dev.ciel.task.TaskHandle, maxSteps: Int = 60): dev.ciel.task.TaskResult {
+        val profile = profileFor(packageName)
+        when (profile.policy) {
+            AutomationPolicy.UNREVIEWED -> return dev.ciel.task.TaskResult(false,
+                "${profile.name} has not been reviewed for automation. Open Ciel → Settings → Games, confirm the game's terms allow automation for your single-player play, then try again.", false)
+            AutomationPolicy.PROHIBITED -> return dev.ciel.task.TaskResult(false, "Automation is marked as prohibited for ${profile.name}.", false)
+            else -> Unit
+        }
+        val base = agentFactory() ?: return dev.ciel.task.TaskResult(false, "Game tasks need Ciel's accessibility service and a connected AI provider.", false)
+        val entry = GameCatalog.entryFor(packageName)
+        val plan = ObjectivePlanner.plan(objective, profile.knowledge, entry?.systems ?: ObjectivePlanner.DEFAULT_SYSTEMS).let { p ->
+            if (profile.policy == AutomationPolicy.MENUS_ONLY) p.copy(steps = p.steps.filter { it.kind != StepKind.QUEST }) else p
+        }
+        val channel = TaskChannel()
+        channels[handle.id] = channel
+        val session = GameSessionState(profile.name, profile.versionName, profile.knowledge, profile.spending,
+            entry?.vocabulary ?: GameVocabulary.GENERIC, channel, confirmations, _activity, entry?.forbiddenAreas ?: GameCatalog.PVP)
+        sessions[handle.id] = session
+        _activity.value = GameActivity(handle.id, profile.name, plan.title, 0, plan.steps.size, plan.steps.firstOrNull()?.title ?: "", "Starting", GameActivity.Status.RUNNING)
+        handle.plan(plan.steps.map { it.title }, "Each step proven on screen; report lists anything not done")
+        channel.say(false, "Plan: ${plan.steps.joinToString(" → ") { it.title }}")
+
+        val results = mutableListOf<StepResult>()
+        var currentReadOnly = false
+        val agent = base.withPlanner { inner -> GamePlannerDecorator(inner, session) { currentReadOnly } }
+        val budgets = plan.stepBudgets(maxSteps)
+        val rules = "Rules: never buy anything or spend premium currency without the user's explicit approval; never play competitive PvP; " +
+            "stop at human-verification checks; never type passwords. ${profile.spending.describe()}" +
+            if (profile.policy == AutomationPolicy.MENUS_ONLY) " Restriction: menus and rewards only; do not play levels or battles." else ""
+        try {
+            agent.session(handle) { runStep ->
+                for ((i, step) in plan.steps.withIndex()) {
+                    handle.checkpoint()
+                    if (session.blockerReason != null) break
+                    currentReadOnly = step.readOnly
+                    session.skipReason = null
+                    _activity.update { it?.copy(stepIndex = i, stepTitle = step.title, currentAction = "Starting: ${step.title}") }
+                    val targets = mutableListOf<String>()
+                    val run = runStep("In ${profile.name}: ${step.objective}", dev.ciel.task.AgentOptions(
+                        maxSteps = budgets[i], includeScreenshots = screenshotsAllowed(), settleDelayMs = 1500,
+                        knowledge = "Game: ${profile.name} (version ${profile.versionName ?: "unknown"}). Overall objective from the user: $objective\n" +
+                            "Current step ${i + 1} of ${plan.steps.size}: ${step.title}.\n$rules\nWhat Ciel has learned (verify on screen before relying on it):\n" +
+                            session.knowledge.briefing(step.system + " " + step.title + " " + objective),
+                        directives = { channel.directives.takeLast(8) },
+                        onObserve = { _activity.update { a -> a?.copy(currentAction = if (a.status == GameActivity.Status.WAITING) a.currentAction else "Reading the screen") } },
+                        onStep = { e: dev.ciel.task.StepEvent ->
+                            session.learn(e)
+                            val t = e.target
+                            if (e.changed && t != null) targets.add(t)
+                        },
+                    ))
+                    val ok = run.result.success && run.result.verified
+                    results += StepResult(step, ok, run.result.verified, run.result.report, session.skipReason)
+                    session.recordStep(step, ok, run.result.report, targets)
+                    if (ok) handle.markStepDone(i)
+                    learn(profile.copy(knowledge = session.knowledge), step.title, run)
+                }
+            }
+        } finally {
+            // Knowledge is kept even if the task is stopped part-way.
+            withContext(NonCancellable) {
+                val latest = profiles.get(packageName) ?: profile
+                profiles.save(latest.copy(knowledge = session.knowledge, updatedAt = System.currentTimeMillis()))
+                channel.clearQuestions()
+                sessions.remove(handle.id)
+            }
+        }
+        channel.questions.value.forEach { session.addAttention("Unanswered: ${it.question}") }
+        val report = GameTaskReport.build(profile.name, results, plan.steps.size, session.attention, session.blockerReason)
+        val allDone = results.size == plan.steps.size && results.all { it.success }
+        _activity.update { it?.copy(status = if (allDone) GameActivity.Status.FINISHED else GameActivity.Status.FAILED, currentAction = if (allDone) "Finished" else "Finished with items needing attention", finalReport = report.text(), needsAttention = !allDone) }
+        channel.say(false, report.text())
+        return dev.ciel.task.TaskResult(allDone, report.text(), verified = allDone)
+    }
+
+    /**
+     * Context for answering "what are you doing / why" while a task runs: live state, plan,
+     * recent verified actions, the current screen reading and relevant knowledge.
+     */
+    fun liveContext(taskId: String?, question: String = ""): String? {
+        val a = _activity.value?.takeIf { taskId == null || it.taskId == taskId } ?: return null
+        val s = sessions[a.taskId]
+        return buildString {
+            append("Game: ${a.game}. Task: ${a.title}. Status: ${a.status.label}. ${a.progressText}. Current step: ${a.stepTitle}. Current action: ${a.currentAction}.\n")
+            s?.lastReading?.let { append("Current screen: ${it.summary()}. Evidence: ${it.evidence.take(6).joinToString()}.\n") }
+            s?.log?.takeLast(8)?.let { if (it.isNotEmpty()) append("Recent actions (with what was observed):\n").append(it.joinToString("\n") { l -> "- $l" }).append('\n') }
+            s?.let { append(it.policy.describe()).append('\n') }
+            channels[a.taskId]?.questions?.value?.forEach { append("Waiting for the user's decision: ${it.question}\n") }
+            s?.knowledge?.let { kb -> append("Relevant knowledge:\n").append(kb.briefing(question.ifBlank { a.stepTitle }, 6)) }
+            a.finalReport?.let { append("\nFinal report:\n").append(it) }
+        }
+    }
+
+    /** Answers an informational question without touching the screen or stopping the task. */
+    suspend fun answer(taskId: String?, question: String): String {
+        val ctx = liveContext(taskId, question) ?: return "No game task is running right now."
+        currentChannel()?.say(true, question)
+        val reply = runCatching { answerer?.answer(ctx, question) }.getOrNull()?.takeIf { it.isNotBlank() }
+            ?: _activity.value?.let { a -> "I'm ${a.currentAction.replaceFirstChar { it.lowercase() }} (${a.progressText}, step: ${a.stepTitle}). ${sessions[a.taskId]?.lastReading?.let { "The screen looks like: ${it.summary()}." } ?: ""}".trim() }
+            ?: "No game task is running right now."
+        currentChannel()?.say(false, reply)
+        return reply
     }
 
     /** Records verified successful step sequences, failures, and newly seen screens. */
@@ -212,10 +354,12 @@ class GameMasterSkill(private val engine: GameEngine, private val profiles: Game
     override val tools = listOf(
         ToolSpec("identify_current_game", "Identify the game on screen and summarise its profile.", Schema.obj()),
         ToolSpec("play_game_task",
-            "Start an autonomous task in a game, e.g. 'collect daily rewards'. Runs in the background; returns a task id. Not complete until task_status says COMPLETED and verified.",
+            "Start an autonomous task in a game, e.g. 'complete my daily quests', 'collect rewards', 'check which buildings need attention', 'explore and learn how the game works'. Ciel plans the steps, follows the user's spending rules and reports. Runs in the background; returns a task id. Not complete until task_status says COMPLETED and verified.",
             Schema.obj(listOf("game", "objective"),
                 "game" to Schema.str("Game name or package"),
                 "objective" to Schema.str("What to accomplish, with a clear completion condition"))),
+        ToolSpec("game_knowledge", "Search what Ciel has learned about a game (locations, actions, mechanics, risks) with confidence levels.",
+            Schema.obj(listOf("game", "query"), "game" to Schema.str("Game name or package"), "query" to Schema.str("What to look up, e.g. 'quests' or 'production'"))),
         ToolSpec("add_game_note", "Save a verified fact about a game to its profile.",
             Schema.obj(listOf("game", "kind", "note"),
                 "game" to Schema.str("Game name or package"),
@@ -240,10 +384,16 @@ class GameMasterSkill(private val engine: GameEngine, private val profiles: Game
                     val open = device.perform(handle.id, handle.generation, DeviceAction.OpenApp(pkg), null)
                     if (open !is dev.ciel.task.ActionOutcome.Done) return@start dev.ciel.task.TaskResult(false, "Could not open the game.", false)
                     kotlinx.coroutines.delay(4000) // games take a while to load
-                    val outcome = engine.play(pkg, objective, handle)
-                    outcome.run?.result ?: dev.ciel.task.TaskResult(false, outcome.message, false)
+                    engine.runObjective(pkg, objective, handle)
                 }
                 ToolOutcome.ok("Game task started (id $id). It runs in the background and is NOT complete yet.")
+            }
+            "game_knowledge" -> {
+                val pkg = SystemSkill.resolveApp(args.reqStr("game"), device.installedApps()) ?: return ToolOutcome.fail("Game not found.")
+                val p = engine.profileFor(pkg)
+                val hits = p.knowledge.search(args.reqStr("query"), 8)
+                if (hits.isEmpty()) ToolOutcome.ok("Nothing learned yet about that in ${p.name}. Ask Ciel to explore the game first.", true)
+                else ToolOutcome.ok(GameKnowledgeBase(hits).briefing(args.reqStr("query"), 8), true)
             }
             "add_game_note" -> {
                 val pkg = SystemSkill.resolveApp(args.reqStr("game"), device.installedApps()) ?: return ToolOutcome.fail("Game not found.")

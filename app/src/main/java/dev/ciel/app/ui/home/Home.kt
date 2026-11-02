@@ -2,6 +2,21 @@ package dev.ciel.app.ui.home
 
 import android.content.res.Configuration
 import androidx.compose.foundation.background
+import androidx.compose.animation.AnimatedContent
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.Crossfade
+import androidx.compose.animation.animateContentSize
+import androidx.compose.animation.core.FastOutSlowInEasing
+import androidx.compose.animation.core.animateDpAsState
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.expandVertically
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.shrinkVertically
+import androidx.compose.animation.togetherWith
+import androidx.compose.foundation.layout.BoxWithConstraints
+import androidx.compose.runtime.saveable.rememberSaveable
+import dev.ciel.app.ui.components.imeVisible
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -13,7 +28,6 @@ import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -118,9 +132,11 @@ private fun StopBar(m: HomeModel, actions: HomeActions) {
 
 @Composable
 private fun Visual(m: HomeModel, actions: HomeActions, size: androidx.compose.ui.unit.Dp) {
+    // Size changes (keyboard opening, rotation) glide instead of jumping.
+    val animated by animateDpAsState(size, tween(320, easing = FastOutSlowInEasing), label = "crystal")
     CielVisual(
         m.state, m.level,
-        Modifier.size(size).clickable(onClick = actions.onTapVisual)
+        Modifier.size(animated).clickable(onClick = actions.onTapVisual)
             .semantics { contentDescription = "Ciel, ${stateText(m.state)}. Tap to speak." },
         offline = !m.online,
         progress = m.activeTasks.firstOrNull()?.progress,
@@ -140,18 +156,19 @@ fun CielHome(m: HomeModel, actions: HomeActions, modifier: Modifier = Modifier) 
                     Text(stateText(m.state).uppercase(), style = MaterialTheme.typography.labelSmall, color = CielColors.forState(m.state))
                     StopBar(m, actions)
                 }
-                Column(Modifier.weight(1f).imePadding()) {
+                Column(Modifier.weight(1f)) {
                     Notices(m, actions)
                     MessageList(m, Modifier.weight(1f))
                     InputBar(actions)
                 }
             }
-        } else Column(Modifier.fillMaxSize().padding(horizontal = 12.dp).imePadding(), horizontalAlignment = Alignment.CenterHorizontally) {
+        } else Column(Modifier.fillMaxSize().padding(horizontal = 12.dp), horizontalAlignment = Alignment.CenterHorizontally) {
+            val keyboard = imeVisible()
             Spacer(Modifier.height(8.dp))
-            Notices(m, actions, max = 2)
-            Visual(m, actions, 240.dp)
-            Text("« ${stateText(m.state)} »", style = MaterialTheme.typography.titleMedium, color = CielColors.forState(m.state))
-            m.partial?.let { Text("“$it”", color = CielColors.Ice, textAlign = TextAlign.Center) }
+            if (!keyboard) Notices(m, actions, max = 2)
+            Visual(m, actions, if (keyboard) 64.dp else 240.dp)
+            AnimatedStatus(m, "« ${stateText(m.state)} »")
+            if (!keyboard) m.partial?.let { Text("“$it”", color = CielColors.Ice, textAlign = TextAlign.Center) }
             StopBar(m, actions)
             MessageList(m, Modifier.weight(1f).fillMaxWidth(), emptyText = "Say \"Hey Ciel\", tap the circle, or type below.")
             InputBar(actions)
@@ -173,7 +190,7 @@ fun RaphaelHome(m: HomeModel, actions: HomeActions, modifier: Modifier = Modifie
     val content: @Composable (Modifier) -> Unit = { mod ->
         Column(mod, verticalArrangement = Arrangement.spacedBy(8.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
-                Visual(m, actions, 116.dp)
+                Visual(m, actions, if (imeVisible()) 56.dp else 116.dp)
                 Column(Modifier.weight(1f).padding(start = 8.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
                     Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                         Stat("STATE", stateText(m.state).uppercase(), Modifier.weight(1f))
@@ -190,7 +207,7 @@ fun RaphaelHome(m: HomeModel, actions: HomeActions, modifier: Modifier = Modifie
             CielPanel(Modifier.weight(1f), title = "Analysis log") {
                 MessageList(m, Modifier.fillMaxSize(), console = true, emptyText = "> awaiting instruction")
             }
-            CielPanel(title = "Operations") {
+            if (!imeVisible()) CielPanel(title = "Operations") {
                 QuickSkillRow(actions)
                 Spacer(Modifier.height(6.dp))
                 RecentTasks(m, actions, 2)
@@ -198,8 +215,8 @@ fun RaphaelHome(m: HomeModel, actions: HomeActions, modifier: Modifier = Modifie
             InputBar(actions)
         }
     }
-    if (landscape()) Row(modifier.fillMaxSize().padding(8.dp).imePadding()) { content(Modifier.weight(1f)) }
-    else content(modifier.fillMaxSize().padding(10.dp).imePadding())
+    if (landscape()) Row(modifier.fillMaxSize().padding(8.dp)) { content(Modifier.weight(1f)) }
+    else content(modifier.fillMaxSize().padding(10.dp))
 }
 
 // ------------------------------------------------------------------------------------------
@@ -207,59 +224,86 @@ fun RaphaelHome(m: HomeModel, actions: HomeActions, modifier: Modifier = Modifie
 // ------------------------------------------------------------------------------------------
 @Composable
 fun SageHome(m: HomeModel, actions: HomeActions, modifier: Modifier = Modifier) {
-    var typing by remember { mutableStateOf(false) }
+    var typing by rememberSaveable { mutableStateOf(false) }
+    val keyboard = imeVisible()
     val glass = androidx.compose.foundation.shape.RoundedCornerShape(28.dp)
-    Column(modifier.fillMaxSize().padding(horizontal = 20.dp, vertical = 12.dp).imePadding(), horizontalAlignment = Alignment.CenterHorizontally) {
+    Column(modifier.fillMaxSize().padding(horizontal = 20.dp, vertical = 12.dp), horizontalAlignment = Alignment.CenterHorizontally) {
         // Header: title, floating-assistant crystal, settings
         Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.Top) {
             Column(Modifier.weight(1f)) {
                 Text("Ciel", style = MaterialTheme.typography.headlineMedium, color = CielColors.Text)
                 Text(LocalLook.current.theme.title, style = MaterialTheme.typography.bodyMedium, color = CielColors.Muted)
             }
+            if (typing) {
+                // While typing the crystal moves into the header so the conversation gets the room.
+                Visual(m, actions, 52.dp)
+            }
             Column(horizontalAlignment = Alignment.CenterHorizontally) {
                 androidx.compose.material3.IconButton(onClick = { actions.onOpen("settings") }) {
                     androidx.compose.material3.Icon(Icons.Filled.Settings, "Settings", tint = CielColors.Text)
                 }
-                Box(Modifier.size(46.dp).border(1.dp, CielColors.PanelBorder, androidx.compose.foundation.shape.CircleShape)
+                if (!typing) Box(Modifier.size(46.dp).border(1.dp, CielColors.PanelBorder, androidx.compose.foundation.shape.CircleShape)
                     .clickable { actions.onOpen("floating") }, contentAlignment = Alignment.Center) {
                     CielVisual(CielState.IDLE, 0f, Modifier.size(40.dp))
                 }
             }
         }
-        Notices(m, actions, max = 1)
-        Spacer(Modifier.weight(0.4f))
-        Visual(m, actions, if (landscape()) 170.dp else 280.dp)
-        Spacer(Modifier.weight(0.3f))
-        // Status line
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            Box(Modifier.size(8.dp).background(CielColors.forState(m.state), androidx.compose.foundation.shape.CircleShape))
-            val status = when (m.state) {
-                CielState.IDLE -> if (m.online) "Idle • Awaiting your command…" else "Offline • Basic commands only"
-                CielState.LISTENING -> "Listening…"
-                else -> stateText(m.state) + "…"
+        if (!keyboard) Notices(m, actions, max = 1)
+        Crossfade(typing, Modifier.weight(1f).fillMaxWidth(), animationSpec = tween(280), label = "sage") { isTyping ->
+            if (isTyping) {
+                MessageList(m, Modifier.fillMaxSize(), emptyText = "Type to Ciel. Your conversation appears here.")
+            } else BoxWithConstraints(Modifier.fillMaxSize()) {
+                // The crystal takes what the screen can spare: never pushes the controls off-screen.
+                val crystal = minOf(280.dp, maxHeight * 0.58f, maxWidth * 0.85f)
+                Column(Modifier.fillMaxSize(), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.Center) {
+                    Visual(m, actions, crystal)
+                    Spacer(Modifier.height(12.dp))
+                    AnimatedStatus(m, when (m.state) {
+                        CielState.IDLE -> if (m.online) "Idle • Awaiting your command…" else "Offline • Basic commands only"
+                        CielState.LISTENING -> "Listening…"
+                        else -> stateText(m.state) + "…"
+                    }, dot = true)
+                    Spacer(Modifier.height(10.dp))
+                    val line = m.partial?.let { "“$it”" } ?: m.streaming.takeLast(220).ifBlank { null } ?: when (m.state) {
+                        CielState.IDLE, CielState.COMPLETED -> m.lastReply?.take(220) ?: "“I am here, Master.”"
+                        else -> "…"
+                    }
+                    Box(Modifier.fillMaxWidth().background(CielColors.Panel, glass).border(1.dp, CielColors.PanelBorder, glass)
+                        .clickable { typing = true }.padding(horizontal = 18.dp, vertical = 12.dp).animateContentSize(tween(220)), contentAlignment = Alignment.Center) {
+                        Text(line, style = MaterialTheme.typography.bodyLarge, color = CielColors.Text, textAlign = TextAlign.Center,
+                            maxLines = if (maxHeight < 420.dp) 2 else 4, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis)
+                    }
+                }
             }
-            Text("  $status", style = MaterialTheme.typography.bodyMedium, color = CielColors.Muted)
         }
         Spacer(Modifier.height(10.dp))
-        // Ciel's line
-        val line = m.partial?.let { "“$it”" } ?: m.streaming.takeLast(220).ifBlank { null } ?: when (m.state) {
-            CielState.IDLE, CielState.COMPLETED -> m.lastReply?.take(220) ?: "“I am here, Master.”"
-            else -> "…"
-        }
-        Box(Modifier.fillMaxWidth().background(CielColors.Panel, glass).border(1.dp, CielColors.PanelBorder, glass)
-            .clickable { actions.onOpen("chats") }.padding(horizontal = 18.dp, vertical = 12.dp), contentAlignment = Alignment.Center) {
-            Text(line, style = MaterialTheme.typography.bodyLarge, color = CielColors.Text, textAlign = TextAlign.Center, maxLines = if (landscape()) 2 else 5)
-        }
-        Spacer(Modifier.height(14.dp))
         StopBar(m, actions)
-        if (typing) InputBar(actions) else BigMic(m.state, actions.onMic)
-        Spacer(Modifier.height(10.dp))
-        // Bottom row: skills, tasks, memory, type
-        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceEvenly) {
-            SageIcon(Icons.Filled.GridView, "Skills") { actions.onOpen("skills") }
-            SageIcon(Icons.Filled.BarChart, "Tasks") { actions.onOpen("tasks") }
-            SageIcon(Icons.Filled.Inventory2, "Memory") { actions.onOpen("memory") }
-            SageIcon(if (typing) Icons.Filled.Mic else Icons.Filled.Keyboard, if (typing) "Voice" else "Type") { typing = !typing }
+        if (typing) InputBar(actions, autoFocus = true) else BigMic(m.state, actions.onMic)
+        // Bottom row: skills, tasks, memory, type — hidden while the keyboard is up.
+        if (!keyboard) {
+            Spacer(Modifier.height(6.dp))
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceEvenly) {
+                SageIcon(Icons.Filled.GridView, "Skills") { actions.onOpen("skills") }
+                SageIcon(Icons.Filled.BarChart, "Tasks") { actions.onOpen("tasks") }
+                SageIcon(Icons.Filled.Inventory2, "Memory") { actions.onOpen("memory") }
+                SageIcon(if (typing) Icons.Filled.Mic else Icons.Filled.Keyboard, if (typing) "Voice" else "Type") { typing = !typing }
+            }
+        }
+    }
+}
+
+/** Status line whose text cross-fades when Ciel's state changes. */
+@Composable
+private fun AnimatedStatus(m: HomeModel, text: String, dot: Boolean = false) {
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        if (dot) {
+            val color by androidx.compose.animation.animateColorAsState(CielColors.forState(m.state), tween(400), label = "dot")
+            Box(Modifier.size(8.dp).background(color, androidx.compose.foundation.shape.CircleShape))
+            Spacer(Modifier.width(8.dp))
+        }
+        AnimatedContent(text, transitionSpec = { fadeIn(tween(220)) togetherWith fadeOut(tween(160)) }, label = "status") { t ->
+            Text(t, style = if (dot) MaterialTheme.typography.bodyMedium else MaterialTheme.typography.titleMedium,
+                color = if (dot) CielColors.Muted else CielColors.forState(m.state), textAlign = TextAlign.Center)
         }
     }
 }
@@ -290,16 +334,21 @@ fun HybridHome(m: HomeModel, actions: HomeActions, modifier: Modifier = Modifier
                 header(Modifier.fillMaxWidth())
                 Spacer(Modifier.height(8.dp)); RecentTasks(m, actions)
             }
-            Column(Modifier.weight(1f).imePadding()) {
+            Column(Modifier.weight(1f)) {
                 Notices(m, actions); QuickSkillRow(actions, Modifier.padding(vertical = 6.dp))
                 MessageList(m, Modifier.weight(1f)); InputBar(actions)
             }
         }
-    } else Column(modifier.fillMaxSize().padding(horizontal = 12.dp).imePadding()) {
-        header(Modifier.fillMaxWidth().padding(top = 8.dp))
-        Notices(m, actions, max = 2)
-        QuickSkillRow(actions, Modifier.padding(vertical = 6.dp))
-        RecentTasks(m, actions, 2)
+    } else Column(modifier.fillMaxSize().padding(horizontal = 12.dp)) {
+        val keyboard = imeVisible()
+        AnimatedVisibility(!keyboard, enter = fadeIn(tween(220)) + expandVertically(tween(260)), exit = fadeOut(tween(160)) + shrinkVertically(tween(260))) {
+            Column {
+                header(Modifier.fillMaxWidth().padding(top = 8.dp))
+                Notices(m, actions, max = 2)
+                QuickSkillRow(actions, Modifier.padding(vertical = 6.dp))
+                RecentTasks(m, actions, 2)
+            }
+        }
         MessageList(m, Modifier.weight(1f).padding(top = 4.dp), emptyText = "Say \"Hey Ciel\" or tap the circle.")
         InputBar(actions)
     }

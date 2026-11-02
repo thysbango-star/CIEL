@@ -6,6 +6,22 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.safeDrawingPadding
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.consumeWindowInsets
+import androidx.compose.foundation.layout.displayCutout
+import androidx.compose.foundation.layout.imePadding
+import androidx.compose.foundation.layout.systemBars
+import androidx.compose.foundation.layout.union
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.expandVertically
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.shrinkVertically
+import androidx.compose.animation.slideInVertically
+import androidx.compose.animation.slideOutVertically
+import dev.ciel.app.ui.components.ScreenFrame
+import dev.ciel.app.ui.components.imeVisible
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
@@ -79,6 +95,7 @@ fun CielApp(onListen: () -> Unit) {
     }
 }
 
+@OptIn(androidx.compose.foundation.layout.ExperimentalLayoutApi::class)
 @Composable
 private fun MainShell(onListen: () -> Unit) {
     val graph = CielApplication.graph
@@ -96,40 +113,53 @@ private fun MainShell(onListen: () -> Unit) {
         onOpen = { route -> if (route == "floating") toggleFloating(context) else nav.go(route) },
     )
     androidx.compose.runtime.LaunchedEffect(nav) { graph.navEvents.collect { nav.go(it) } }
+    // Keyboard handling (see components/Layout.kt): the shell is the only place insets are applied.
+    // While the keyboard is open the bottom navigation is hidden, so the input sits directly on
+    // top of the keyboard on every device and keyboard height.
+    val keyboard = imeVisible()
     Scaffold(
         containerColor = androidx.compose.ui.graphics.Color.Transparent,
+        contentWindowInsets = WindowInsets.systemBars.union(WindowInsets.displayCutout),
         bottomBar = {
-            NavigationBar(containerColor = CielColors.Panel) {
-                tabs.forEach { t ->
-                    NavigationBarItem(
-                        selected = route == t.route,
-                        onClick = { if (route != t.route) nav.navigate(t.route) { popUpTo("home"); launchSingleTop = true } },
-                        icon = { Icon(t.icon, contentDescription = t.label) },
-                        label = { Text(t.label) },
-                        colors = NavigationBarItemDefaults.colors(indicatorColor = CielColors.Cyan.copy(alpha = 0.2f)),
-                    )
+            AnimatedVisibility(!keyboard, enter = fadeIn(tween(180)) + expandVertically(tween(180)), exit = fadeOut(tween(120)) + shrinkVertically(tween(120))) {
+                NavigationBar(containerColor = CielColors.Panel) {
+                    tabs.forEach { t ->
+                        NavigationBarItem(
+                            selected = route == t.route,
+                            onClick = { if (route != t.route) nav.navigate(t.route) { popUpTo("home"); launchSingleTop = true } },
+                            icon = { Icon(t.icon, contentDescription = t.label) },
+                            label = { Text(t.label, maxLines = 1) },
+                            colors = NavigationBarItemDefaults.colors(indicatorColor = CielColors.Cyan.copy(alpha = 0.2f)),
+                        )
+                    }
                 }
             }
         },
     ) { padding ->
-        Box(Modifier.fillMaxSize().padding(padding)) {
-            NavHost(nav, startDestination = "home") {
+        Box(Modifier.fillMaxSize().padding(padding).consumeWindowInsets(padding).imePadding()) {
+            NavHost(
+                nav, startDestination = "home",
+                enterTransition = { fadeIn(tween(240)) + slideInVertically(tween(240)) { it / 48 } },
+                exitTransition = { fadeOut(tween(160)) },
+                popEnterTransition = { fadeIn(tween(240)) },
+                popExitTransition = { fadeOut(tween(160)) + slideOutVertically(tween(200)) { it / 48 } },
+            ) {
                 composable("home") { HomeScreen(actions) }
-                composable("chats") { ChatsScreen(onOpened = { nav.navigate("home") { popUpTo("home") { inclusive = true } } }) }
-                composable("tasks") { TasksScreen() }
-                composable("connect") { ConnectionsScreen(onDeveloper = { nav.go("providers") }) }
-                composable("settings") { SettingsHub(nav) }
-                composable("appearance") { AppearanceScreen(onPickDesign = { nav.go("designs") }) }
+                composable("chats") { ScreenFrame { ChatsScreen(onOpened = { nav.navigate("home") { popUpTo("home") { inclusive = true } } }) } }
+                composable("tasks") { ScreenFrame { TasksScreen() } }
+                composable("connect") { ScreenFrame { ConnectionsScreen(onDeveloper = { nav.go("providers") }) } }
+                composable("settings") { ScreenFrame { SettingsHub(nav) } }
+                composable("appearance") { ScreenFrame { AppearanceScreen(onPickDesign = { nav.go("designs") }) } }
                 composable("designs") { DesignPickerScreen(onChosen = { nav.popBackStack() }) }
-                composable("voice") { VoiceScreen(nav) }
-                composable("preferences") { PreferencesScreen(nav) }
-                composable("status") { SystemHub(nav) }
-                composable("developer") { DeveloperScreen(nav) }
-                composable("providers") { ProvidersScreen() }
-                composable("memory") { MemoryScreen() }
-                composable("permissions") { PermissionsScreen() }
-                composable("games") { GamesScreen() }
-                composable("skills") { SkillsScreen() }
+                composable("voice") { ScreenFrame { VoiceScreen(nav) } }
+                composable("preferences") { ScreenFrame { PreferencesScreen(nav) } }
+                composable("status") { ScreenFrame { SystemHub(nav) } }
+                composable("developer") { ScreenFrame { DeveloperScreen(nav) } }
+                composable("providers") { ScreenFrame { ProvidersScreen() } }
+                composable("memory") { ScreenFrame { MemoryScreen() } }
+                composable("permissions") { ScreenFrame { PermissionsScreen() } }
+                composable("games") { ScreenFrame { GamesScreen() } }
+                composable("skills") { ScreenFrame { SkillsScreen() } }
             }
             ConfirmationHost()
         }

@@ -1,4 +1,7 @@
+@file:OptIn(androidx.compose.foundation.layout.ExperimentalLayoutApi::class)
 package dev.ciel.app.ui.screens
+
+import androidx.compose.foundation.layout.FlowRow
 
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -168,7 +171,7 @@ fun MemoryScreen() {
                     }.getOrElse { "Import failed: ${it.message}" }
                 }
             }
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            FlowRow(verticalArrangement = Arrangement.spacedBy(4.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 OutlinedButton(onClick = { exporter.launch("ciel-memories.json") }) { Text("Export") }
                 OutlinedButton(onClick = { importer.launch(arrayOf("application/json", "text/plain", "*/*")) }) { Text("Import backup") }
             }
@@ -185,54 +188,12 @@ fun MemoryScreen() {
     editing?.let { m ->
         var text by remember(m.id) { mutableStateOf(m.content) }
         AlertDialog(onDismissRequest = { editing = null }, title = { Text("Edit memory") },
-            text = { OutlinedTextField(text, { text = it }) },
+            text = { OutlinedTextField(text, { text = it }, Modifier.fillMaxWidth(), maxLines = 10) },
             confirmButton = { TextButton(onClick = { scope.launch {
                 when (val r = graph.memory.edit(m.id, text)) { is MemoryManager.SaveResult.Rejected -> notice = r.reason; else -> Unit }
                 editing = null } }) { Text("Save") } },
             dismissButton = { TextButton(onClick = { editing = null }) { Text("Cancel") } })
     }
-}
-
-/** Game profiles (Part 9): review automation policy, inspect knowledge, delete. */
-@Composable
-fun GamesScreen() {
-    val graph = CielApplication.graph
-    val scope = rememberCoroutineScope()
-    val profiles by remember { graph.gameProfiles.observe() }.collectAsStateWithLifecycle(emptyList<GameProfile>())
-    LazyColumn(Modifier.fillMaxSize().padding(12.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-        item {
-            CielPanel(title = "Game Master") {
-                Text("Profiles are created the first time Ciel sees a game. Autonomous play stays off until you review each game: " +
-                    "only allow it for single-player games whose terms permit automation. Ciel never solves CAPTCHAs, bypasses anti-cheat, " +
-                    "plays competitive PvP, or spends money without asking.", color = CielColors.Muted)
-            }
-        }
-        if (profiles.isEmpty()) item { Text("No games recognised yet. Ask: \"Ciel, what game is this?\" while a game is open.", color = CielColors.Muted) }
-        items(profiles, key = { it.packageName }) { p ->
-            CielPanel(title = p.name) {
-                Text("${p.packageName} · v${p.versionName ?: "?"}${if (p.interfaceChangeSuspected) " · ⚠ updated since last verified run" else ""}", color = CielColors.Muted, style = MaterialTheme.typography.labelSmall)
-                Text("Automation: ${policyLabel(p.policy)}", color = if (p.policy == AutomationPolicy.ALLOWED_SINGLE_PLAYER) CielColors.Green else CielColors.Amber)
-                Row {
-                    AutomationPolicy.values().filter { it != AutomationPolicy.UNREVIEWED }.forEach { pol ->
-                        TextButton(onClick = { scope.launch { graph.gameProfiles.save(p.copy(policy = pol, updatedAt = System.currentTimeMillis())) } }) {
-                            Text(policyLabel(pol), style = MaterialTheme.typography.labelSmall)
-                        }
-                    }
-                }
-                if (p.strategies.isNotEmpty()) Text("Verified strategies: " + p.strategies.joinToString { "${it.objective} (${it.successCount}✓/${it.failureCount}✗)" }, color = CielColors.Text)
-                if (p.mechanics.isNotEmpty()) Text("Mechanics: " + p.mechanics.joinToString("; "), color = CielColors.Text)
-                Text("${p.knownScreens.size} screens known", color = CielColors.Muted, style = MaterialTheme.typography.labelSmall)
-                TextButton(onClick = { scope.launch { graph.gameProfiles.delete(p.packageName) } }) { Text("Delete profile", color = CielColors.Danger) }
-            }
-        }
-    }
-}
-
-private fun policyLabel(p: AutomationPolicy) = when (p) {
-    AutomationPolicy.UNREVIEWED -> "not reviewed (off)"
-    AutomationPolicy.ALLOWED_SINGLE_PLAYER -> "allowed (single-player)"
-    AutomationPolicy.MENUS_ONLY -> "menus & rewards only"
-    AutomationPolicy.PROHIBITED -> "prohibited"
 }
 
 /** Skills (Part 12): enable/disable, missing permissions, install JSON skills without rebuilding. */
@@ -261,7 +222,7 @@ fun SkillsScreen() {
         var json by remember { mutableStateOf("") }
         var error by remember { mutableStateOf<String?>(null) }
         AlertDialog(onDismissRequest = { install = false }, title = { Text("Install skill") },
-            text = { Column {
+            text = { Column(Modifier.verticalScroll(androidx.compose.foundation.rememberScrollState())) {
                 Text("Paste a skill definition. Skills can only use Ciel's guarded actions (see ARCHITECTURE.md → Skills).", color = CielColors.Muted)
                 OutlinedTextField(json, { json = it }, Modifier.fillMaxWidth(), minLines = 6)
                 error?.let { Text(it, color = CielColors.Danger) }

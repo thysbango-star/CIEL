@@ -1,4 +1,7 @@
+@file:OptIn(androidx.compose.foundation.layout.ExperimentalLayoutApi::class)
 package dev.ciel.app.ui.screens
+
+import androidx.compose.foundation.layout.FlowRow
 
 import android.content.Intent
 import android.net.Uri
@@ -91,7 +94,7 @@ fun ConnectionsScreen(onDeveloper: () -> Unit) {
                 Text(configs.joinToString("\n") { "• ${it.displayName.substringAfter(" · ", "model")}: ${it.model}" }, color = CielColors.Text, style = MaterialTheme.typography.bodyMedium)
                 Text(if (configs.any { it.enabled }) "Connected" else "Paused", color = if (configs.any { it.enabled }) CielColors.Green else CielColors.Amber, style = MaterialTheme.typography.labelSmall)
                 checks.value[connId]?.let { Text(it, color = if (it.startsWith("✓")) CielColors.Green else CielColors.Amber) }
-                Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                FlowRow(verticalArrangement = Arrangement.spacedBy(4.dp), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                     OutlinedButton(onClick = {
                         checks.value = checks.value + (connId to "Checking…")
                         scope.launch {
@@ -113,7 +116,7 @@ fun ConnectionsScreen(onDeveloper: () -> Unit) {
             Text("Choose a provider, paste your API key, press Connect. Ciel sets up everything else.", color = CielColors.Muted)
             Column(Modifier.padding(vertical = 6.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
                 choices.chunked(2).forEach { row ->
-                    Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    FlowRow(verticalArrangement = Arrangement.spacedBy(4.dp), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                         row.forEach { (k, label) -> FilterChip(selected = preset == k, onClick = { preset = k; result = null }, label = { Text(label) }) }
                     }
                 }

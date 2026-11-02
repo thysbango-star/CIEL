@@ -55,6 +55,8 @@ data class AppSettings(
     val floatingEnabled: Boolean = false,
     /** Lets autonomous automation send screenshots to a vision model (in addition to the element tree). */
     val allowScreenshots: Boolean = false,
+    /** Read text on game screens on the phone (ML Kit, offline) during game tasks. */
+    val gameScreenReading: Boolean = true,
     val reducedMotion: Boolean = false,
     val discordWebhooks: List<String> = emptyList(),
     val appearance: dev.ciel.app.design.Appearance = dev.ciel.app.design.Appearance(),
@@ -120,6 +122,7 @@ class SettingsStore(private val context: Context, scope: CoroutineScope) {
             "wakeSingleWord" to s.wakeSingleWord
             "floatingEnabled" to s.floatingEnabled
             "allowScreenshots" to s.allowScreenshots
+            "gameScreenReading" to s.gameScreenReading
             "reducedMotion" to s.reducedMotion
             "discordWebhooks" to s.discordWebhooks
             "appearance" to json {
@@ -187,6 +190,7 @@ class SettingsStore(private val context: Context, scope: CoroutineScope) {
                 wakeSensitivity = runCatching { dev.ciel.app.voice.WakeSensitivity.valueOf(o["wakeSensitivity"]?.string ?: "") }.getOrDefault(dev.ciel.app.voice.WakeSensitivity.NORMAL),
                 wakeSingleWord = o["wakeSingleWord"]?.bool ?: true,
                 allowScreenshots = o["allowScreenshots"]?.bool ?: false,
+                gameScreenReading = o["gameScreenReading"]?.bool ?: true,
                 reducedMotion = o["reducedMotion"]?.bool ?: false,
                 discordWebhooks = o["discordWebhooks"]?.array?.mapNotNull { it.string } ?: emptyList(),
                 appearance = o["appearance"]?.let { a ->

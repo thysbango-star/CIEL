@@ -48,6 +48,7 @@ object ActionPolicy {
             is DeviceAction.ClickNode -> screen?.nodes?.firstOrNull { it.id == action.nodeId }?.label ?: action.expectedLabel
             is DeviceAction.ClickText -> action.text
             is DeviceAction.TapAt -> screen?.let { nodeAt(it, action.x, action.y)?.label }
+            is DeviceAction.TapRel -> screen?.takeIf { it.screenWidth > 0 }?.let { s -> action.toPixels(s.screenWidth, s.screenHeight).let { p -> nodeAt(s, p.x, p.y)?.label } }
             is DeviceAction.LongPressAt -> screen?.let { nodeAt(it, action.x, action.y)?.label }
             is DeviceAction.OpenSettings -> action.screen
             else -> null
@@ -55,10 +56,15 @@ object ActionPolicy {
         if (action is DeviceAction.OpenSettings && security.containsMatchIn(action.screen)) {
             return RiskAssessment(Risk.CONSEQUENTIAL, "Opening security-related settings.")
         }
-        if (action is DeviceAction.TapAt && targetText == null) {
+        val tapPoint = when (action) {
+            is DeviceAction.TapAt -> action
+            is DeviceAction.TapRel -> screen?.takeIf { it.screenWidth > 0 }?.let { action.toPixels(it.screenWidth, it.screenHeight) }
+            else -> null
+        }
+        if (tapPoint != null && targetText == null) {
             // Coordinate taps on unlabelled areas (common in games) are routine unless the screen
             // as a whole is a store / payment screen.
-            if (screen != null && screen.nodes.any { purchase.containsMatchIn(it.label) && isNear(it, action.x, action.y) }) {
+            if (screen != null && screen.nodes.any { purchase.containsMatchIn(it.label) && isNear(it, tapPoint.x, tapPoint.y) }) {
                 return RiskAssessment(Risk.CONSEQUENTIAL, "The tap is next to a purchase element.")
             }
         }

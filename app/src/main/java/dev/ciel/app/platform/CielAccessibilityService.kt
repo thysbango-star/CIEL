@@ -55,6 +55,9 @@ class CielAccessibilityService : AccessibilityService() {
     /** Node handles from the most recent observation, keyed by the ids given to the model. */
     private val nodeMap = HashMap<Int, AccessibilityNodeInfo>()
     private var stopPill: TextView? = null
+    /** Centres of text read from the screenshot, by node id (games). */
+    private val ocrTargets = HashMap<Int, Pair<Int, Int>>()
+    @Volatile private var lastShotAt = 0L
     private var buttonCallback: AccessibilityButtonController.AccessibilityButtonCallback? = null
 
     override fun onServiceConnected() {
@@ -74,7 +77,7 @@ class CielAccessibilityService : AccessibilityService() {
         // Show the STOP pill whenever an automation task (screen control) is running.
         scope.launch {
             graph.tasks.tasks
-                .map { list -> list.any { it.isActive && (it.kind == "execute" || it.kind == "game") } }
+                .map { list -> list.any { it.isActive && it.kind == "execute" } }
                 .distinctUntilChanged()
                 .collect { running -> if (running) showStopPill() else hideStopPill() }
         }
@@ -105,19 +108,51 @@ class CielAccessibilityService : AccessibilityService() {
         val nodes = ArrayList<UiNode>()
         synchronized(nodeMap) {
             nodeMap.clear()
+            ocrTargets.clear()
             if (root != null) collectNodes(root, nodes, 0)
         }
-        val metrics = resources.displayMetrics
-        val shot = if (includeScreenshot && Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) screenshot() else null
+        val (w, h) = screenSize()
+        // Games draw everything themselves (no accessible elements). Then Ciel reads the screen's
+        // text on the phone (ML Kit, offline — the image is not sent anywhere for this) and
+        // fingerprints the image, so she can tell screens apart and see that a tap did something.
+        val canvasLike = nodes.count { it.text != null || it.contentDescription != null } < 4
+        val readText = canvasLike && CielApplication.graph.settings.current.gameScreenReading
+        var shot: String? = null
+        var hash: Long? = null
+        if ((includeScreenshot || readText) && Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            val bmp = screenshotBitmap()
+            if (bmp != null) {
+                hash = ScreenVision.averageHash(bmp)
+                if (readText) {
+                    val notch = dev.ciel.app.overlay.ActivityNotch.bounds()
+                    val sx = w.toFloat() / bmp.width; val sy = h.toFloat() / bmp.height
+                    ScreenVision.readText(bmp).forEachIndexed { i, (text, r) ->
+                        val rect = Rect((r.left * sx).toInt(), (r.top * sy).toInt(), (r.right * sx).toInt(), (r.bottom * sy).toInt())
+                        if (notch != null && Rect.intersects(notch, rect)) return@forEachIndexed // Ciel's own notch
+                        val id = OCR_ID_BASE + i
+                        nodes += UiNode(id, text = text.take(120), className = dev.ciel.task.OCR_CLASS, bounds = Bounds(rect.left, rect.top, rect.right, rect.bottom))
+                        synchronized(nodeMap) { ocrTargets[id] = rect.centerX() to rect.centerY() }
+                    }
+                }
+                if (includeScreenshot) shot = ScreenVision.jpegBase64(bmp)
+            }
+        }
         ScreenSnapshot(
             packageName = root?.packageName?.toString(),
             activityName = lastActivity,
             nodes = nodes,
-            screenWidth = metrics.widthPixels,
-            screenHeight = metrics.heightPixels,
+            screenWidth = w,
+            screenHeight = h,
             screenshotBase64 = shot,
+            visualHash = hash,
         )
     }
+
+    /** Full display size: the coordinate space of screenshots and gestures. */
+    private fun screenSize(): Pair<Int, Int> = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+        val b = (getSystemService(WINDOW_SERVICE) as WindowManager).maximumWindowMetrics.bounds
+        b.width() to b.height()
+    } else resources.displayMetrics.let { it.widthPixels to it.heightPixels }
 
     private fun collectNodes(node: AccessibilityNodeInfo, out: MutableList<UiNode>, depth: Int) {
         if (depth > 40 || out.size > 400) return
@@ -142,22 +177,25 @@ class CielAccessibilityService : AccessibilityService() {
     }
 
     @RequiresApi(Build.VERSION_CODES.R)
-    private suspend fun screenshot(): String? = suspendCancellableCoroutine { cont ->
-        takeScreenshot(Display.DEFAULT_DISPLAY, mainExecutor, object : TakeScreenshotCallback {
-            override fun onSuccess(result: ScreenshotResult) {
-                val encoded = runCatching {
-                    val hw = Bitmap.wrapHardwareBuffer(result.hardwareBuffer, result.colorSpace) ?: return@runCatching null
-                    val soft = hw.copy(Bitmap.Config.ARGB_8888, false)
-                    result.hardwareBuffer.close()
-                    val scale = 1024f / maxOf(soft.width, soft.height)
-                    val small = if (scale < 1f) Bitmap.createScaledBitmap(soft, (soft.width * scale).toInt(), (soft.height * scale).toInt(), true) else soft
-                    val bytes = ByteArrayOutputStream().also { small.compress(Bitmap.CompressFormat.JPEG, 70, it) }.toByteArray()
-                    Base64.encodeToString(bytes, Base64.NO_WRAP)
-                }.getOrNull()
-                if (cont.isActive) cont.resume(encoded)
-            }
-            override fun onFailure(errorCode: Int) { if (cont.isActive) cont.resume(null) }
-        })
+    private suspend fun screenshotBitmap(): Bitmap? {
+        // Android allows about one screenshot per second; wait out the interval instead of failing.
+        val since = System.currentTimeMillis() - lastShotAt
+        if (since < 1050) kotlinx.coroutines.delay(1050 - since)
+        lastShotAt = System.currentTimeMillis()
+        return suspendCancellableCoroutine { cont ->
+            takeScreenshot(Display.DEFAULT_DISPLAY, mainExecutor, object : TakeScreenshotCallback {
+                override fun onSuccess(result: ScreenshotResult) {
+                    val bmp = runCatching {
+                        val hw = Bitmap.wrapHardwareBuffer(result.hardwareBuffer, result.colorSpace)
+                        val soft = hw?.copy(Bitmap.Config.ARGB_8888, false)
+                        result.hardwareBuffer.close()
+                        soft
+                    }.getOrNull()
+                    if (cont.isActive) cont.resume(bmp)
+                }
+                override fun onFailure(errorCode: Int) { if (cont.isActive) cont.resume(null) }
+            })
+        }
     }
 
     // ------------------------------------------------------------------ actions
@@ -165,9 +203,12 @@ class CielAccessibilityService : AccessibilityService() {
     suspend fun perform(action: DeviceAction): ActionOutcome = withContext(Dispatchers.Main) {
         when (action) {
             is DeviceAction.ClickNode -> {
+                // Text read from a game's pixels: tap its centre.
+                synchronized(nodeMap) { ocrTargets[action.nodeId] }?.let { (x, y) -> return@withContext gesture(tapPath(x, y), 60) }
                 val node = synchronized(nodeMap) { nodeMap[action.nodeId] } ?: return@withContext ActionOutcome.Failed("Element #${action.nodeId} is not on the current screen.")
                 clickNode(node)
             }
+            is DeviceAction.TapRel -> screenSize().let { (w, h) -> val p = action.toPixels(w, h); gesture(tapPath(p.x, p.y), 60) }
             is DeviceAction.ClickText -> {
                 val root = rootInActiveWindow ?: return@withContext ActionOutcome.Failed("No active window.")
                 val match = root.findAccessibilityNodeInfosByText(action.text).firstOrNull { it.isVisibleToUser }
@@ -209,8 +250,13 @@ class CielAccessibilityService : AccessibilityService() {
         val r = Rect().also { node.getBoundsInScreen(it) }
         if (r.isEmpty) return ActionOutcome.Failed("Element has no visible area.")
         val p = tapPath(r.centerX(), r.centerY())
-        return if (dispatchGesture(GestureDescription.Builder().addStroke(GestureDescription.StrokeDescription(p, 0, 60)).build(), null, null))
-            ActionOutcome.Done else ActionOutcome.Failed("Tap was rejected.")
+        overlaysPassThrough(true)
+        val ok = dispatchGesture(GestureDescription.Builder().addStroke(GestureDescription.StrokeDescription(p, 0, 60)).build(), object : GestureResultCallback() {
+            override fun onCompleted(gestureDescription: GestureDescription?) { overlaysPassThrough(false) }
+            override fun onCancelled(gestureDescription: GestureDescription?) { overlaysPassThrough(false) }
+        }, null)
+        if (!ok) overlaysPassThrough(false)
+        return if (ok) ActionOutcome.Done else ActionOutcome.Failed("Tap was rejected.")
     }
 
     private suspend fun scroll(action: DeviceAction.Scroll): ActionOutcome {
@@ -234,13 +280,29 @@ class CielAccessibilityService : AccessibilityService() {
 
     private fun tapPath(x: Int, y: Int) = Path().apply { moveTo(x.toFloat(), y.toFloat()) }
 
-    private suspend fun gesture(path: Path, durationMs: Long): ActionOutcome = suspendCancellableCoroutine { cont ->
-        val g = GestureDescription.Builder().addStroke(GestureDescription.StrokeDescription(path, 0, durationMs)).build()
-        val accepted = dispatchGesture(g, object : GestureResultCallback() {
-            override fun onCompleted(gestureDescription: GestureDescription?) { if (cont.isActive) cont.resume(ActionOutcome.Done) }
-            override fun onCancelled(gestureDescription: GestureDescription?) { if (cont.isActive) cont.resume(ActionOutcome.Failed("Gesture was cancelled by the system.")) }
-        }, null)
-        if (!accepted && cont.isActive) cont.resume(ActionOutcome.Failed("Gesture was rejected."))
+    /** Dispatches a gesture. Ciel's own overlays let touches through meanwhile, so they never block the app. */
+    private suspend fun gesture(path: Path, durationMs: Long): ActionOutcome {
+        overlaysPassThrough(true)
+        try {
+            return suspendCancellableCoroutine { cont ->
+                val g = GestureDescription.Builder().addStroke(GestureDescription.StrokeDescription(path, 0, durationMs)).build()
+                val accepted = dispatchGesture(g, object : GestureResultCallback() {
+                    override fun onCompleted(gestureDescription: GestureDescription?) { if (cont.isActive) cont.resume(ActionOutcome.Done) }
+                    override fun onCancelled(gestureDescription: GestureDescription?) { if (cont.isActive) cont.resume(ActionOutcome.Failed("Gesture was cancelled by the system.")) }
+                }, null)
+                if (!accepted && cont.isActive) cont.resume(ActionOutcome.Failed("Gesture was rejected."))
+            }
+        } finally {
+            overlaysPassThrough(false)
+        }
+    }
+
+    private fun overlaysPassThrough(on: Boolean) {
+        dev.ciel.app.overlay.ActivityNotch.passThrough(on)
+        val pill = stopPill ?: return
+        val lp = pill.layoutParams as? WindowManager.LayoutParams ?: return
+        lp.flags = if (on) lp.flags or WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE else lp.flags and WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE.inv()
+        runCatching { (getSystemService(WINDOW_SERVICE) as WindowManager).updateViewLayout(pill, lp) }
     }
 
     // ------------------------------------------------------------------ stop pill
@@ -275,5 +337,7 @@ class CielAccessibilityService : AccessibilityService() {
     companion object {
         @Volatile var instance: CielAccessibilityService? = null
             private set
+        /** Ids of text read from pixels start here, so they never clash with accessibility ids. */
+        const val OCR_ID_BASE = 10_000
     }
 }

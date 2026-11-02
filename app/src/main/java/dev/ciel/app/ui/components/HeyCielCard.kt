@@ -1,4 +1,7 @@
+@file:OptIn(androidx.compose.foundation.layout.ExperimentalLayoutApi::class)
 package dev.ciel.app.ui.components
+
+import androidx.compose.foundation.layout.FlowRow
 
 import android.Manifest
 import android.content.Intent
@@ -72,7 +75,7 @@ fun HeyCielCard(modifier: Modifier = Modifier, showAdvanced: Boolean = true) {
             is HeyCielState.Failed -> Text(st.message, color = CielColors.Danger)
             HeyCielState.Idle -> Unit
         }
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.padding(top = 4.dp)) {
+        FlowRow(verticalArrangement = Arrangement.spacedBy(4.dp), horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.padding(top = 4.dp)) {
             if (!on || health is WakeHealth.Problem) Button(enabled = setup !is HeyCielState.Downloading, onClick = {
                 val wanted = buildList {
                     add(Manifest.permission.RECORD_AUDIO)
@@ -95,7 +98,7 @@ fun HeyCielCard(modifier: Modifier = Modifier, showAdvanced: Boolean = true) {
 
         if (showAdvanced) {
             Text("Sensitivity", color = CielColors.Text, modifier = Modifier.padding(top = 8.dp))
-            Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+            FlowRow(verticalArrangement = Arrangement.spacedBy(4.dp), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                 WakeSensitivity.values().forEach { sv ->
                     FilterChip(selected = settings.wakeSensitivity == sv, label = { Text(sv.label) }, onClick = {
                         scope.launch { graph.settings.update { it.copy(wakeSensitivity = sv) }; if (on) WakeWordService.reload(context) }
@@ -107,7 +110,7 @@ fun HeyCielCard(modifier: Modifier = Modifier, showAdvanced: Boolean = true) {
                 Text("Also wake on \"Ciel\" alone", Modifier.weight(1f), color = CielColors.Text)
                 Switch(settings.wakeSingleWord, { v -> scope.launch { graph.settings.update { it.copy(wakeSingleWord = v) }; if (on) WakeWordService.reload(context) } })
             }
-            Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+            FlowRow(verticalArrangement = Arrangement.spacedBy(4.dp), horizontalArrangement = Arrangement.spacedBy(4.dp)) {
                 TextButton(onClick = { context.startActivity(Intent(Settings.ACTION_MANAGE_DEFAULT_APPS_SETTINGS)) }) { Text("Default assistant") }
                 TextButton(onClick = { context.startActivity(Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS)) }) { Text("Battery settings") }
             }

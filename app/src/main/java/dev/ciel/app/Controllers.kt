@@ -137,8 +137,41 @@ class ConversationController(private val graph: AppGraph) {
         else if (_state.value == CielState.LISTENING) _state.value = CielState.IDLE
     }
 
+    /**
+     * While a game task runs, "what are you doing / why / skip that / pause / stop" go to the task
+     * (answered from its live state, without stopping it) instead of starting a new conversation turn.
+     * Voice is routed here too, so speaking to Ciel never reaches the game's controls.
+     */
+    private fun routeToGameTask(text: String, speak: Boolean, onFinished: (() -> Unit)?): Boolean {
+        val a = graph.gameEngine.activity.value ?: return false
+        if (a.status == dev.ciel.game.GameActivity.Status.FINISHED || a.status == dev.ciel.game.GameActivity.Status.FAILED) return false
+        val msg = dev.ciel.game.TaskMessage.parse(text)
+        val aboutTask = msg !is dev.ciel.game.TaskMessage.Question ||
+            Regex("(?i)\\b(what are you doing|what('?s| is) next|why|explain|where did you|how much|what does|which (building|quest)|status|progress|plan)\\b").containsMatchIn(text)
+        if (!aboutTask) return false
+        val cid = conversationId
+        graph.appScope.launch {
+            val dao = graph.db.messages()
+            dao.insert(MessageEntity(conversationId = cid, role = "user", text = text))
+            val reply = if (msg is dev.ciel.game.TaskMessage.Question) graph.gameEngine.answer(a.taskId, text) else {
+                graph.messageGameTask(text)
+                when (msg) {
+                    dev.ciel.game.TaskMessage.Stop -> "Affirmative. Everything is stopped."
+                    dev.ciel.game.TaskMessage.Pause -> "Paused, Master. Say \"continue\" when you're ready."
+                    dev.ciel.game.TaskMessage.Resume -> "Continuing."
+                    else -> "Understood. I'll take that into account from the next action."
+                }
+            }
+            dao.insert(MessageEntity(conversationId = cid, role = "ciel", text = reply))
+            _lastReply.value = reply
+            if (speak) withContext(Dispatchers.Main) { graph.voice.speak(reply) { onFinished?.invoke() } } else onFinished?.invoke()
+        }
+        return true
+    }
+
     fun send(text: String, images: List<ImageInput> = emptyList(), mode: ReasoningMode = ReasoningMode.CONVERSE, speak: Boolean = false, onFinished: (() -> Unit)? = null) {
         if (text.isBlank()) return
+        if (images.isEmpty() && routeToGameTask(text, speak, onFinished)) return
         if (images.isEmpty()) UiCommands.parse(text)?.let { handleUi(it, text, speak, onFinished); return }
         job?.cancel()
         graph.voice.stop()

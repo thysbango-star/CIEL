@@ -1,3 +1,4 @@
+@file:OptIn(androidx.compose.foundation.layout.ExperimentalLayoutApi::class)
 package dev.ciel.app.ui.screens
 
 import androidx.compose.foundation.background
@@ -13,12 +14,31 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.requiredSize
+import androidx.compose.foundation.layout.FlowRow
+import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.layout.aspectRatio
+import androidx.compose.foundation.layout.safeDrawingPadding
+import androidx.compose.foundation.lazy.grid.GridCells
+import androidx.compose.foundation.lazy.grid.GridItemSpan
+import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
+import androidx.compose.foundation.lazy.grid.items
+import androidx.compose.animation.Crossfade
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.scaleIn
+import androidx.compose.animation.scaleOut
+import androidx.compose.material.icons.filled.Check
+import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.TextButton
+import dev.ciel.app.ui.components.ScaledPreview
+import dev.ciel.app.ui.components.Spacing
+import dev.ciel.app.ui.components.SystemNotice
+import dev.ciel.app.ui.home.Bubble
+import dev.ciel.app.ui.home.InputBar
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.LazyRow
-import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Button
@@ -34,10 +54,7 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.TransformOrigin
-import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -64,7 +81,7 @@ import dev.ciel.task.TaskState
 import dev.ciel.task.TaskStatus
 import kotlinx.coroutines.launch
 
-private enum class PreviewKind(val label: String) { HOME("Home"), VOICE("Voice"), FLOATING("Floating") }
+private enum class PreviewKind(val label: String) { HOME("Home"), CHAT("Chat"), FLOATING("Floating"), VOICE("Voice") }
 
 private val sampleModel = HomeModel(
     state = CielState.IDLE, stateLabel = null, level = 0f, partial = null, listenError = null,
@@ -80,24 +97,48 @@ private val sampleModel = HomeModel(
 
 private val noActions = HomeActions({}, { _, _, _ -> }, {}, {}, {}, {}, {})
 
-/** A live, scaled-down render. Touches select instead of reaching the preview. */
+/** Live render of an appearance at phone size, scaled to fit. Touches never reach the preview. */
 @Composable
-private fun Preview(appearance: Appearance, kind: PreviewKind, scale: Float, onTap: () -> Unit) {
-    val look = CielLook(appearance.copy(animation = AnimationLevel.SUBTLE), DesignPalette.resolve(appearance))
-    val w = 360.dp; val h = 720.dp
-    Box(Modifier.size(w * scale, h * scale).clip(RoundedCornerShape(16.dp)).border(1.dp, Color(look.palette.border), RoundedCornerShape(16.dp))) {
-        Box(Modifier.requiredSize(w, h).graphicsLayer { scaleX = scale; scaleY = scale; transformOrigin = TransformOrigin(0f, 0f) }) {
+private fun AppearancePreview(appearance: Appearance, kind: PreviewKind, modifier: Modifier, animated: Boolean = false) {
+    val look = CielLook(appearance.copy(animation = if (animated) appearance.animation else AnimationLevel.OFF), DesignPalette.resolve(appearance))
+    Box(modifier) {
+        ScaledPreview(Modifier.fillMaxSize(), shape = RoundedCornerShape(14.dp)) {
             CielTheme(look) {
                 ThemeBackground(Modifier.fillMaxSize()) {
                     when (kind) {
                         PreviewKind.HOME -> HomeLayout(appearance.design, sampleModel, noActions)
+                        PreviewKind.CHAT -> ChatPreview()
                         PreviewKind.VOICE -> VoicePreview()
                         PreviewKind.FLOATING -> FloatingPreview()
                     }
                 }
             }
         }
-        Box(Modifier.size(w * scale, h * scale).clickable(remember { MutableInteractionSource() }, null, onClick = onTap))
+        // Absorbs touches so the preview's buttons are never triggered.
+        Box(Modifier.matchParentSize().clickable(remember { MutableInteractionSource() }, null) {})
+    }
+}
+
+@Composable
+private fun ChatPreview() {
+    Column(Modifier.fillMaxSize().padding(14.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            CielVisual(CielState.SPEAKING, 0f, Modifier.size(56.dp))
+            Column(Modifier.padding(start = 10.dp)) {
+                Text("Ciel", style = MaterialTheme.typography.titleMedium, color = CielColors.Text)
+                Text("Online · Gemini", style = MaterialTheme.typography.labelSmall, color = CielColors.Green)
+            }
+        }
+        SystemNotice("Skill", "Research activated", CielColors.Cyan)
+        sampleModel.messages.forEach { Bubble(it) }
+        Bubble(MessageEntity(3, "p", "user", "Remind me at 8, please."))
+        SystemNotice("Notice", "Reminder set for 08:00", CielColors.Green)
+        Spacer(Modifier.weight(1f))
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            Button(onClick = {}) { Text("Approve") }
+            OutlinedButton(onClick = {}) { Text("Decline") }
+        }
+        InputBar(noActions)
     }
 }
 
@@ -115,60 +156,133 @@ private fun VoicePreview() {
 private fun FloatingPreview() {
     Box(Modifier.fillMaxSize().background(Color(0xFF2B2F36))) {
         Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-            repeat(6) { Box(Modifier.fillMaxWidth().height(70.dp).background(Color(0xFF3A3F48), RoundedCornerShape(10.dp))) }
+            repeat(7) { Box(Modifier.fillMaxWidth().height(70.dp).background(Color(0xFF3A3F48), RoundedCornerShape(10.dp))) }
         }
-        Column(Modifier.padding(start = 16.dp, top = 260.dp)) {
+        // Activity notch, as shown above a game while Ciel works.
+        Row(Modifier.align(Alignment.TopCenter).padding(top = 18.dp).background(CielColors.Deep.copy(alpha = 0.85f), RoundedCornerShape(50))
+            .border(1.dp, CielColors.PanelBorder, RoundedCornerShape(50)).padding(horizontal = 10.dp, vertical = 6.dp), verticalAlignment = Alignment.CenterVertically) {
+            CielVisual(CielState.EXECUTING, 0f, Modifier.size(22.dp), progress = 0.45f)
+            Text("  Completing quests…  4/9", style = MaterialTheme.typography.labelSmall, color = CielColors.Text)
+        }
+        Column(Modifier.padding(start = 16.dp, top = 300.dp, end = 16.dp)) {
             CielVisual(CielState.IDLE, 0f, Modifier.size(70.dp))
-            Box(Modifier.width(260.dp)) { CielPanel { Text("Ready, Master. Double-tap me to stop everything.", color = CielColors.Text) } }
+            CielPanel { Text("Ready, Master. Double-tap me to stop everything.", color = CielColors.Text) }
         }
     }
 }
 
-/** Theme gallery (8 themes) and layouts (4), with live previews. */
+/**
+ * Theme gallery (8 themes) and layouts (4). An adaptive grid: as many columns as fit
+ * (≥150 dp each), so every card is fully visible and nothing extends past the screen.
+ */
 @Composable
 fun DesignPickerScreen(onChosen: (() -> Unit)? = null) {
     val graph = CielApplication.graph
     val scope = rememberCoroutineScope()
     val settings by graph.settings.flow.collectAsStateWithLifecycle()
     val current = settings.appearance
-    var kind by remember { mutableStateOf(PreviewKind.HOME) }
+    var previewing by remember { mutableStateOf<Appearance?>(null) }
     fun set(a: Appearance) { scope.launch { graph.settings.update { it.copy(appearance = a) } } }
 
-    LazyColumn(Modifier.fillMaxSize().padding(12.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
-        item {
-            Text("Choose Ciel's look", style = MaterialTheme.typography.titleLarge, color = CielColors.Text)
-            Text("Tap a preview to apply it. Change it any time in Settings → Appearance.", color = CielColors.Muted)
-            Row(horizontalArrangement = Arrangement.spacedBy(6.dp), modifier = Modifier.padding(top = 6.dp)) {
+    LazyVerticalGrid(
+        columns = GridCells.Adaptive(minSize = 150.dp),
+        modifier = Modifier.fillMaxSize(),
+        contentPadding = PaddingValues(Spacing.m),
+        horizontalArrangement = Arrangement.spacedBy(Spacing.m),
+        verticalArrangement = Arrangement.spacedBy(Spacing.m),
+    ) {
+        item(span = { GridItemSpan(maxLineSpan) }) {
+            Column {
+                Text("Choose Ciel's look", style = MaterialTheme.typography.titleLarge, color = CielColors.Text)
+                Text("Tap a card to apply it, or Preview to see it full size first.", color = CielColors.Muted)
+            }
+        }
+        item(span = { GridItemSpan(maxLineSpan) }) { Text("Theme", style = MaterialTheme.typography.titleMedium, color = CielColors.Cyan) }
+        items(ThemeStyle.values().toList(), key = { "t" + it.name }) { t ->
+            val a = current.copy(theme = t, accent = null)
+            ChoiceCard(
+                title = t.title, description = t.tagline, selected = current.theme == t,
+                swatches = DesignPalette.forTheme(t).let { listOf(it.background, it.background2, it.accent, it.accent2) },
+                preview = { AppearancePreview(a, PreviewKind.HOME, it) },
+                onApply = { set(a) }, onPreview = { previewing = a },
+            )
+        }
+        item(span = { GridItemSpan(maxLineSpan) }) { Text("Layout", style = MaterialTheme.typography.titleMedium, color = CielColors.Cyan, modifier = Modifier.padding(top = Spacing.s)) }
+        items(CielDesign.values().toList(), key = { "d" + it.name }) { d ->
+            val a = current.copy(design = d)
+            ChoiceCard(
+                title = d.title, description = d.tagline, selected = current.design == d, swatches = emptyList(),
+                preview = { AppearancePreview(a, PreviewKind.HOME, it) },
+                onApply = { set(a) }, onPreview = { previewing = a },
+            )
+        }
+        if (onChosen != null) item(span = { GridItemSpan(maxLineSpan) }) {
+            Button(onClick = onChosen, modifier = Modifier.fillMaxWidth().padding(top = Spacing.s)) { Text("Continue") }
+        }
+    }
+    previewing?.let { p ->
+        ThemePreviewDialog(p, isCurrent = p.theme == current.theme && p.design == current.design,
+            onApply = { set(p); previewing = null }, onDismiss = { previewing = null })
+    }
+}
+
+@Composable
+private fun ChoiceCard(
+    title: String, description: String, selected: Boolean, swatches: List<Int>,
+    preview: @Composable (Modifier) -> Unit, onApply: () -> Unit, onPreview: () -> Unit,
+) {
+    val border by androidx.compose.animation.animateColorAsState(if (selected) CielColors.Cyan else CielColors.PanelBorder, tween(250), label = "border")
+    val shape = RoundedCornerShape(18.dp)
+    Column(
+        Modifier.fillMaxWidth().background(CielColors.Panel, shape).border(if (selected) 2.dp else 1.dp, border, shape)
+            .clickable(onClick = onApply).padding(10.dp),
+        verticalArrangement = Arrangement.spacedBy(6.dp),
+    ) {
+        Box {
+            preview(Modifier.fillMaxWidth().aspectRatio(0.5f))
+            androidx.compose.animation.AnimatedVisibility(selected, Modifier.align(Alignment.TopEnd).padding(6.dp),
+                enter = fadeIn(tween(200)) + scaleIn(tween(200), 0.6f), exit = fadeOut(tween(150)) + scaleOut(tween(150), 0.6f)) {
+                Box(Modifier.size(26.dp).background(CielColors.Cyan, CircleShape), contentAlignment = Alignment.Center) {
+                    androidx.compose.material3.Icon(androidx.compose.material.icons.Icons.Filled.Check, "Selected", tint = CielColors.Void, modifier = Modifier.size(18.dp))
+                }
+            }
+        }
+        Text(title, style = MaterialTheme.typography.titleMedium, color = if (selected) CielColors.Cyan else CielColors.Text)
+        Text(description, style = MaterialTheme.typography.bodyMedium, color = CielColors.Muted)
+        if (swatches.isNotEmpty()) Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+            swatches.forEach { Box(Modifier.size(14.dp).background(Color(it), CircleShape).border(0.5.dp, CielColors.PanelBorder, CircleShape)) }
+        }
+        FlowRow(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+            TextButton(onClick = onPreview) { Text("Preview") }
+            TextButton(onClick = onApply, enabled = !selected) { Text(if (selected) "Applied" else "Apply") }
+        }
+    }
+}
+
+/** Full-screen preview of a theme/layout with tabs; closing keeps the current selection. */
+@Composable
+private fun ThemePreviewDialog(a: Appearance, isCurrent: Boolean, onApply: () -> Unit, onDismiss: () -> Unit) {
+    var kind by remember { mutableStateOf(PreviewKind.HOME) }
+    androidx.compose.ui.window.Dialog(onDismissRequest = onDismiss, properties = androidx.compose.ui.window.DialogProperties(usePlatformDefaultWidth = false)) {
+        Column(Modifier.fillMaxSize().background(CielColors.Void.copy(alpha = 0.96f)).safeDrawingPadding().padding(Spacing.m),
+            verticalArrangement = Arrangement.spacedBy(Spacing.s)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Column(Modifier.weight(1f)) {
+                    Text(a.theme.title, style = MaterialTheme.typography.titleLarge, color = CielColors.Text)
+                    Text("${a.design.title} layout · ${a.theme.tagline}", color = CielColors.Muted, style = MaterialTheme.typography.bodyMedium)
+                }
+            }
+            FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                 PreviewKind.values().forEach { k -> FilterChip(selected = kind == k, onClick = { kind = k }, label = { Text(k.label) }) }
             }
-        }
-        item { Text("Theme", style = MaterialTheme.typography.titleMedium, color = CielColors.Cyan) }
-        item {
-            LazyRow(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                items(ThemeStyle.values().toList(), key = { it.name }) { t ->
-                    val selected = current.theme == t
-                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                        Preview(current.copy(theme = t, accent = null), kind, 0.42f) { set(current.copy(theme = t, accent = null)) }
-                        Text((if (selected) "✓ " else "") + t.title, color = if (selected) CielColors.Cyan else CielColors.Text, style = MaterialTheme.typography.titleMedium)
-                        Text(t.tagline, color = CielColors.Muted, style = MaterialTheme.typography.labelSmall)
-                    }
-                }
+            Crossfade(kind, Modifier.weight(1f).fillMaxWidth(), animationSpec = tween(220), label = "preview") { k ->
+                AppearancePreview(a, k, Modifier.fillMaxSize(), animated = true)
+            }
+            Row(horizontalArrangement = Arrangement.spacedBy(Spacing.s)) {
+                OutlinedButton(onClick = onDismiss, modifier = Modifier.weight(1f)) { Text("Back") }
+                Button(onClick = onApply, enabled = !isCurrent, modifier = Modifier.weight(1f)) { Text(if (isCurrent) "In use" else "Apply") }
             }
         }
-        item { Text("Layout", style = MaterialTheme.typography.titleMedium, color = CielColors.Cyan) }
-        item {
-            LazyRow(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                items(CielDesign.values().toList(), key = { it.name }) { d ->
-                    val selected = current.design == d
-                    Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.width(160.dp)) {
-                        Preview(current.copy(design = d), kind, 0.42f) { set(current.copy(design = d)) }
-                        Text((if (selected) "✓ " else "") + d.title, color = if (selected) CielColors.Cyan else CielColors.Text, style = MaterialTheme.typography.titleMedium)
-                        Text(d.tagline, color = CielColors.Muted, style = MaterialTheme.typography.labelSmall)
-                    }
-                }
-            }
-        }
-        if (onChosen != null) item { Button(onClick = onChosen, modifier = Modifier.fillMaxWidth()) { Text("Continue") } }
     }
 }
 
@@ -184,8 +298,8 @@ fun AppearanceScreen(onPickDesign: () -> Unit) {
         item {
             CielPanel(title = "Theme & layout") {
                 Row(verticalAlignment = Alignment.CenterVertically) {
-                    Preview(a, PreviewKind.HOME, 0.3f, onPickDesign)
-                    Column(Modifier.padding(start = 12.dp)) {
+                    AppearancePreview(a, PreviewKind.HOME, Modifier.width(96.dp).aspectRatio(0.5f))
+                    Column(Modifier.padding(start = 12.dp).weight(1f)) {
                         Text(a.theme.title, style = MaterialTheme.typography.titleMedium, color = CielColors.Text)
                         Text("${a.design.title} layout", color = CielColors.Muted, style = MaterialTheme.typography.bodyMedium)
                         Button(onClick = onPickDesign) { Text("Browse themes") }
@@ -203,7 +317,7 @@ fun AppearanceScreen(onPickDesign: () -> Unit) {
         }
         item {
             CielPanel(title = "Accent colour") {
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                FlowRow(verticalArrangement = Arrangement.spacedBy(6.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     Swatch(Color(DesignPalette.forTheme(a.theme).accent), a.accent == null) { set { it.copy(accent = null) } }
                     AccentColor.values().forEach { c -> Swatch(Color(c.argb), a.accent == c) { set { it.copy(accent = c) } } }
                 }
@@ -211,7 +325,7 @@ fun AppearanceScreen(onPickDesign: () -> Unit) {
         }
         item {
             CielPanel(title = "Animation") {
-                Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                FlowRow(verticalArrangement = Arrangement.spacedBy(6.dp), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                     AnimationLevel.values().forEach { l -> FilterChip(selected = a.animation == l, onClick = { set { it.copy(animation = l) } }, label = { Text(l.label) }) }
                 }
                 Text("Subtle or Off saves battery. Backgrounds are drawn once and never animate.", color = CielColors.Muted, style = MaterialTheme.typography.labelSmall)
@@ -219,7 +333,7 @@ fun AppearanceScreen(onPickDesign: () -> Unit) {
         }
         item {
             CielPanel(title = "Floating assistant size") {
-                Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                FlowRow(verticalArrangement = Arrangement.spacedBy(6.dp), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                     FloatingSize.values().forEach { f -> FilterChip(selected = a.floatingSize == f, onClick = { set { it.copy(floatingSize = f) } }, label = { Text(f.label) }) }
                 }
             }

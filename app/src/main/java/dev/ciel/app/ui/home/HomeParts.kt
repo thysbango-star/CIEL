@@ -9,7 +9,31 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.Crossfade
+import androidx.compose.animation.animateContentSize
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.scaleIn
+import androidx.compose.animation.scaleOut
+import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.text.KeyboardActions
+import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.material.icons.filled.KeyboardArrowDown
+import androidx.compose.material3.SmallFloatingActionButton
+import androidx.compose.runtime.derivedStateOf
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.ui.text.input.KeyboardCapitalization
+import kotlinx.coroutines.launch
 import androidx.compose.foundation.border
+import androidx.compose.ui.draw.drawBehind
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -135,21 +159,45 @@ fun Notices(m: HomeModel, actions: HomeActions, max: Int = 3) {
     Column(verticalArrangement = Arrangement.spacedBy(4.dp)) { items.take(max).forEach { it() } }
 }
 
+/**
+ * Conversation list anchored to the bottom (reverseLayout): the newest message stays visible when
+ * the keyboard opens or a reply streams in. If the user scrolls up to read, new messages do not
+ * pull them down; a "latest" button appears instead.
+ */
 @Composable
 fun MessageList(m: HomeModel, modifier: Modifier, console: Boolean = false, emptyText: String? = null) {
     val listState = rememberLazyListState()
-    LaunchedEffect(m.messages.size, m.streaming.length / 80) {
-        val count = m.messages.size + if (m.streaming.isNotEmpty()) 1 else 0
-        if (count > 0) listState.animateScrollToItem(count - 1)
+    val scope = rememberCoroutineScope()
+    val atLatest by remember { derivedStateOf { listState.firstVisibleItemIndex == 0 && listState.firstVisibleItemScrollOffset < 120 } }
+    val newest = m.messages.lastOrNull()?.id
+    LaunchedEffect(newest) {
+        // A message the user just sent always brings them to the bottom; replies only if already there.
+        val mine = m.messages.lastOrNull()?.role == "user"
+        if (mine || listState.firstVisibleItemIndex <= 1) listState.animateScrollToItem(0)
     }
-    LazyColumn(modifier, state = listState, verticalArrangement = Arrangement.spacedBy(if (console) 4.dp else 8.dp)) {
-        if (m.messages.isEmpty() && m.streaming.isEmpty() && emptyText != null) item {
-            Text(emptyText, color = CielColors.Muted, style = MaterialTheme.typography.bodyMedium, modifier = Modifier.padding(8.dp))
+    Box(modifier) {
+        LazyColumn(
+            Modifier.fillMaxSize(), state = listState, reverseLayout = true,
+            verticalArrangement = Arrangement.spacedBy(if (console) 4.dp else 8.dp, Alignment.Bottom),
+            contentPadding = PaddingValues(vertical = 6.dp),
+        ) {
+            if (m.streaming.isNotEmpty()) item(key = "live") {
+                val live = MessageEntity(-1, "", "ciel", m.streaming)
+                if (console) ConsoleLine(live) else Bubble(live)
+            }
+            items(m.messages.asReversed(), key = { it.id }) {
+                Box(Modifier.animateItem(fadeInSpec = tween(260), placementSpec = tween(260), fadeOutSpec = tween(160))) {
+                    if (console) ConsoleLine(it) else Bubble(it)
+                }
+            }
+            if (m.messages.isEmpty() && m.streaming.isEmpty() && emptyText != null) item(key = "empty") {
+                Text(emptyText, color = CielColors.Muted, style = MaterialTheme.typography.bodyMedium, modifier = Modifier.padding(8.dp))
+            }
         }
-        items(m.messages, key = { it.id }) { if (console) ConsoleLine(it) else Bubble(it) }
-        if (m.streaming.isNotEmpty()) item {
-            val live = MessageEntity(-1, "", "ciel", m.streaming)
-            if (console) ConsoleLine(live) else Bubble(live)
+        AnimatedVisibility(!atLatest, Modifier.align(Alignment.BottomEnd).padding(8.dp), enter = fadeIn(tween(200)) + scaleIn(tween(200), 0.8f), exit = fadeOut(tween(150)) + scaleOut(tween(150), 0.8f)) {
+            SmallFloatingActionButton(onClick = { scope.launch { listState.animateScrollToItem(0) } }, containerColor = CielColors.Panel, contentColor = CielColors.Cyan) {
+                Icon(Icons.Filled.KeyboardArrowDown, "Jump to the latest message")
+            }
         }
     }
 }
@@ -199,7 +247,7 @@ fun QuickSkillRow(actions: HomeActions, modifier: Modifier = Modifier) {
 private fun PromptDialog(q: QuickSkill, onDismiss: () -> Unit, onSend: (String) -> Unit) {
     var text by remember { mutableStateOf("") }
     androidx.compose.material3.AlertDialog(onDismissRequest = onDismiss, title = { Text(q.label) },
-        text = { OutlinedTextField(text, { text = it }, placeholder = { Text("What should Ciel ${q.label.lowercase()}?") }) },
+        text = { OutlinedTextField(text, { text = it }, Modifier.fillMaxWidth(), maxLines = 6, placeholder = { Text("What should Ciel ${q.label.lowercase()}?") }) },
         confirmButton = { TextButton(enabled = text.isNotBlank(), onClick = { onSend(text.trim()) }) { Text("Go") } },
         dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } })
 }
@@ -220,14 +268,20 @@ fun RecentTasks(m: HomeModel, actions: HomeActions, max: Int = 3) {
     }
 }
 
-/** Text input with image attach and reasoning mode; voice stays the primary action. */
+/**
+ * Text input with image attach and reasoning mode. Grows with the text up to [MAX_INPUT_HEIGHT],
+ * then scrolls inside itself; the keyboard's action key sends. Unsent text survives the keyboard
+ * closing, rotation and recomposition (rememberSaveable).
+ */
 @Composable
-fun InputBar(actions: HomeActions, modifier: Modifier = Modifier, bigMic: Boolean = false, placeholder: String = "Speak or type to Ciel…") {
+fun InputBar(actions: HomeActions, modifier: Modifier = Modifier, bigMic: Boolean = false, placeholder: String = "Speak or type to Ciel…", autoFocus: Boolean = false) {
     val context = LocalContext.current
-    var input by remember { mutableStateOf("") }
-    var mode by remember { mutableStateOf(ReasoningMode.CONVERSE) }
+    var input by rememberSaveable { mutableStateOf("") }
+    var mode by rememberSaveable { mutableStateOf(ReasoningMode.CONVERSE) }
     var modeMenu by remember { mutableStateOf(false) }
     var image by remember { mutableStateOf<ImageInput?>(null) }
+    val focus = remember { FocusRequester() }
+    LaunchedEffect(autoFocus) { if (autoFocus) runCatching { focus.requestFocus() } }
     val picker = rememberLauncherForActivityResult(ActivityResultContracts.PickVisualMedia()) { uri ->
         if (uri != null) image = runCatching {
             val bmp: Bitmap = if (Build.VERSION.SDK_INT >= 28) ImageDecoder.decodeBitmap(ImageDecoder.createSource(context.contentResolver, uri)) { d, _, _ -> d.allocator = ImageDecoder.ALLOCATOR_SOFTWARE }
@@ -238,17 +292,25 @@ fun InputBar(actions: HomeActions, modifier: Modifier = Modifier, bigMic: Boolea
             ImageInput("image/jpeg", Base64.encodeToString(out.toByteArray(), Base64.NO_WRAP))
         }.getOrNull()
     }
+    val send = {
+        if (input.isNotBlank()) {
+            actions.onSend(input.trim(), image, mode)
+            input = ""; image = null; mode = ReasoningMode.CONVERSE
+        }
+    }
     val raphael = LocalLook.current.design == CielDesign.RAPHAEL
-    Column(modifier) {
+    Column(modifier.fillMaxWidth().animateContentSize(tween(180))) {
         image?.let {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Text("Image attached", color = CielColors.Cyan, style = MaterialTheme.typography.labelSmall)
                 TextButton(onClick = { image = null }) { Text("Remove") }
             }
         }
-        Row(verticalAlignment = Alignment.CenterVertically) {
+        Row(verticalAlignment = Alignment.Bottom, modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp)) {
             Box {
-                TextButton(onClick = { modeMenu = true }) { Text(mode.name.take(3), style = MaterialTheme.typography.labelSmall, color = CielColors.Cyan) }
+                TextButton(onClick = { modeMenu = true }, modifier = Modifier.heightIn(min = 48.dp)) {
+                    Text(mode.name.take(3), style = MaterialTheme.typography.labelSmall, color = CielColors.Cyan)
+                }
                 DropdownMenu(expanded = modeMenu, onDismissRequest = { modeMenu = false }) {
                     ReasoningMode.values().forEach { md ->
                         DropdownMenuItem(text = { Text(md.name.lowercase().replaceFirstChar { it.uppercase() }) }, onClick = { mode = md; modeMenu = false })
@@ -256,33 +318,55 @@ fun InputBar(actions: HomeActions, modifier: Modifier = Modifier, bigMic: Boolea
                 }
             }
             OutlinedTextField(
-                value = input, onValueChange = { input = it }, modifier = Modifier.weight(1f),
-                placeholder = { Text(if (raphael) "> command" else placeholder) }, maxLines = 5,
+                value = input, onValueChange = { input = it },
+                modifier = Modifier.weight(1f).heightIn(min = 48.dp, max = MAX_INPUT_HEIGHT).focusRequester(focus),
+                placeholder = { Text(if (raphael) "> command" else placeholder, maxLines = 1) },
+                minLines = 1, maxLines = 8,
+                keyboardOptions = KeyboardOptions(capitalization = KeyboardCapitalization.Sentences, imeAction = ImeAction.Send),
+                keyboardActions = KeyboardActions(onSend = { send() }),
                 colors = OutlinedTextFieldDefaults.colors(focusedBorderColor = CielColors.Cyan, unfocusedBorderColor = CielColors.PanelBorder),
-                shape = if (raphael) RoundedCornerShape(4.dp) else RoundedCornerShape(22.dp),
+                shape = if (raphael) RoundedCornerShape(4.dp) else RoundedCornerShape(24.dp),
             )
-            if (input.isBlank()) {
-                IconButton(onClick = { picker.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)) }) {
-                    Icon(Icons.Filled.Image, "Attach image", tint = CielColors.Muted)
+            Crossfade(input.isBlank(), animationSpec = tween(160), label = "send") { blank ->
+                Row {
+                    if (blank) {
+                        IconButton(onClick = { picker.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)) }) {
+                            Icon(Icons.Filled.Image, "Attach image", tint = CielColors.Muted)
+                        }
+                        if (!bigMic) IconButton(onClick = actions.onMic) { Icon(Icons.Filled.Mic, "Speak", tint = CielColors.Cyan) }
+                    } else {
+                        IconButton(onClick = send) { Icon(Icons.AutoMirrored.Filled.Send, "Send", tint = CielColors.Cyan) }
+                    }
                 }
-                if (!bigMic) IconButton(onClick = actions.onMic) { Icon(Icons.Filled.Mic, "Speak", tint = CielColors.Cyan) }
-            } else {
-                IconButton(onClick = {
-                    actions.onSend(input.trim(), image, mode)
-                    input = ""; image = null; mode = ReasoningMode.CONVERSE
-                }) { Icon(Icons.AutoMirrored.Filled.Send, "Send", tint = CielColors.Cyan) }
             }
         }
     }
 }
 
-/** Large round microphone button for the voice-first layouts. */
+/** Long messages stop growing the field at this height and scroll inside it. */
+val MAX_INPUT_HEIGHT = 168.dp
+
+/** Large round microphone button. While listening, soft halos expand and fade (seamless loop). */
 @Composable
 fun BigMic(state: CielState, onClick: () -> Unit, modifier: Modifier = Modifier) {
     val active = state == CielState.LISTENING
-    Box(
-        modifier.size(72.dp).background(if (active) CielColors.Cyan else CielColors.Cyan.copy(alpha = 0.15f), CircleShape)
-            .border(1.5.dp, CielColors.Cyan, CircleShape).clickable(onClick = onClick),
-        contentAlignment = Alignment.Center,
-    ) { Icon(Icons.Filled.Mic, "Speak to Ciel", tint = if (active) CielColors.Void else CielColors.Cyan, modifier = Modifier.size(32.dp)) }
+    val bg by androidx.compose.animation.animateColorAsState(if (active) CielColors.Cyan else CielColors.Cyan.copy(alpha = 0.15f), tween(250), label = "mic")
+    val haloAmt by androidx.compose.animation.core.animateFloatAsState(if (active) 1f else 0f, tween(300), label = "halo")
+    val loop = androidx.compose.animation.core.rememberInfiniteTransition(label = "mic")
+    val f by loop.animateFloat(0f, 1f, androidx.compose.animation.core.infiniteRepeatable(tween(1800, easing = androidx.compose.animation.core.LinearEasing)), label = "f")
+    val halo = CielColors.Cyan
+    Box(modifier.size(96.dp).drawBehind {
+        if (haloAmt > 0.01f) for (k in 0 until 2) {
+            val p = (f + k * 0.5f) % 1f
+            // Fades in and out over its cycle, so the restart is invisible.
+            val alpha = 0.35f * haloAmt * kotlin.math.sin(p * Math.PI).toFloat()
+            drawCircle(halo.copy(alpha = alpha), radius = size.minDimension * (0.38f + 0.12f * p), style = androidx.compose.ui.graphics.drawscope.Stroke(2.dp.toPx()))
+        }
+    }, contentAlignment = Alignment.Center) {
+        Box(
+            Modifier.size(72.dp).background(bg, CircleShape)
+                .border(1.5.dp, CielColors.Cyan, CircleShape).clickable(onClick = onClick),
+            contentAlignment = Alignment.Center,
+        ) { Icon(Icons.Filled.Mic, "Speak to Ciel", tint = if (active) CielColors.Void else CielColors.Cyan, modifier = Modifier.size(32.dp)) }
+    }
 }

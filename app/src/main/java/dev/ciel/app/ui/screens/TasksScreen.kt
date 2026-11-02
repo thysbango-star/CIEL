@@ -1,4 +1,7 @@
+@file:OptIn(androidx.compose.foundation.layout.ExperimentalLayoutApi::class)
 package dev.ciel.app.ui.screens
+
+import androidx.compose.foundation.layout.FlowRow
 
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -94,7 +97,7 @@ fun TasksScreen() {
             }
         }
         item {
-            Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+            FlowRow(verticalArrangement = Arrangement.spacedBy(4.dp), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                 TaskFilter.values().forEach { f ->
                     val count = when (f) {
                         TaskFilter.ACTIVE -> active.size
@@ -181,7 +184,7 @@ private fun TaskCard(t: TaskState) {
             t.report?.let { Text("Result: $it", color = CielColors.Text, style = MaterialTheme.typography.bodyMedium, modifier = Modifier.padding(top = 4.dp)) }
             t.errors.takeLast(3).forEach { Text("⚠ $it", color = CielColors.Amber, style = MaterialTheme.typography.labelSmall) }
         }
-        Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+        FlowRow(verticalArrangement = Arrangement.spacedBy(4.dp), horizontalArrangement = Arrangement.spacedBy(4.dp)) {
             if (t.isActive) {
                 if (t.status == TaskStatus.PAUSED) TextButton(onClick = { graph.tasks.resume(t.id) }) { Text("Resume") }
                 else TextButton(onClick = { graph.tasks.pause(t.id) }) { Text("Pause") }
@@ -228,7 +231,7 @@ private fun NewTaskDialog(initial: TaskSpec, onDismiss: () -> Unit) {
         onDismissRequest = onDismiss,
         title = { Text("New task") },
         text = {
-            Column(Modifier.heightIn(max = 520.dp).verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+            Column(Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(6.dp)) {
                 OutlinedTextField(name, { name = it }, label = { Text("Name (optional)") }, singleLine = true, modifier = Modifier.fillMaxWidth())
                 OutlinedTextField(objective, { objective = it }, label = { Text("Objective") }, minLines = 3, modifier = Modifier.fillMaxWidth(),
                     placeholder = { Text("e.g. Complete today's daily quests and claim the rewards") })

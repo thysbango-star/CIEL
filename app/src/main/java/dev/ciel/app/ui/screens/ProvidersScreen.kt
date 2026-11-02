@@ -1,4 +1,7 @@
+@file:OptIn(androidx.compose.foundation.layout.ExperimentalLayoutApi::class)
 package dev.ciel.app.ui.screens
+
+import androidx.compose.foundation.layout.FlowRow
 
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -98,7 +101,7 @@ fun ProvidersScreen() {
                     append(" · Requests today: ${graph.usage.requestsToday(p.id)}")
                 }, color = CielColors.Muted, style = MaterialTheme.typography.labelSmall)
                 status.value[p.id]?.let { Text(it, color = if (it.startsWith("✓")) CielColors.Green else CielColors.Amber) }
-                Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                FlowRow(verticalArrangement = Arrangement.spacedBy(4.dp), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                     OutlinedButton(onClick = {
                         status.value = status.value + (p.id to "Testing…")
                         scope.launch {
@@ -139,7 +142,7 @@ private fun ProviderEditor(initial: ProviderConfig, onDismiss: () -> Unit) {
         containerColor = CielColors.Deep,
         title = { Text(if (exists) "Edit provider" else "Add provider") },
         text = {
-            Column(Modifier.heightIn(max = 560.dp).verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+            Column(Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(6.dp)) {
                 OutlinedTextField(c.displayName, { c = c.copy(displayName = it) }, label = { Text("Name") }, singleLine = true)
                 OutlinedTextField(c.baseUrl, { c = c.copy(baseUrl = it.trim()) }, label = { Text("Base URL") }, singleLine = true)
                 OutlinedTextField(key, { key = it.trim() }, label = { Text(if (exists && graph.vault.has(KeyVault.providerKeyName(c.id))) "API key (leave blank to keep)" else "API key") },

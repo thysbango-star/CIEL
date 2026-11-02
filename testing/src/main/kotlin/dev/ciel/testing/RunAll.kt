@@ -13,6 +13,7 @@ fun main() {
     researchTests()
     engineTests()
     setupTests()
+    gameIntelligenceTests()
     val failed = T.runAll()
     exitProcess(if (failed == 0) 0 else 1)
 }

@@ -108,7 +108,40 @@ class AppGraph(val context: Context) {
         return ScreenAgent(guardedDevice, LlmActionPlanner(gateway) { settings.current.providers }, locks)
     }
 
-    val gameEngine = GameEngine(gameProfiles, AndroidInstalledPackages(context), { screenAgent() }, { settings.current.allowScreenshots })
+    val gameEngine = GameEngine(gameProfiles, AndroidInstalledPackages(context), { screenAgent() }, { settings.current.allowScreenshots }, confirmations).apply {
+        // Questions asked while a game task runs are answered by the fast model from live context;
+        // the task keeps running (non-blocking communication).
+        answerer = dev.ciel.game.TaskQuestionAnswerer { ctx, question ->
+            val ordered = settings.current.providers.filter { it.enabled }.sortedBy { it.tier.ordinal }
+            if (ordered.isEmpty()) return@TaskQuestionAnswerer null
+            val request = dev.ciel.ai.ChatRequest(listOf(
+                dev.ciel.ai.ChatMessage.system("You are Ciel, explaining what you are doing in a game task for your user. Answer in 1–3 short sentences using ONLY the context. " +
+                    "Never claim an action that is not in the context. If the context does not say, say you are not sure yet. Address the user as Master."),
+                dev.ciel.ai.ChatMessage.user("Context:\n$ctx\n\nQuestion: $question"),
+            ), temperature = 0.2, maxOutputTokens = 200)
+            runCatching { gateway.call(ordered, request, stream = false).second.text }.getOrNull()
+        }
+    }
+
+    /**
+     * A message for the running game task (from the notch, voice or chat). Control words act at
+     * once — Stop never waits for an AI reply — and questions are answered while the task runs.
+     * Returns false when no game task is running.
+     */
+    fun messageGameTask(text: String): Boolean {
+        val a = gameEngine.activity.value ?: return false
+        val active = a.status == dev.ciel.game.GameActivity.Status.RUNNING || a.status == dev.ciel.game.GameActivity.Status.WAITING || a.status == dev.ciel.game.GameActivity.Status.PAUSED
+        val channel = gameEngine.channel(a.taskId)
+        when (val m = dev.ciel.game.TaskMessage.parse(text)) {
+            dev.ciel.game.TaskMessage.Stop -> { emergencyStop.trigger("stop requested during game task"); channel?.say(true, text) }
+            dev.ciel.game.TaskMessage.Pause -> if (active) { tasks.pause(a.taskId); gameEngine.markPaused(true); channel?.say(true, text) }
+            dev.ciel.game.TaskMessage.Resume -> if (active) { tasks.resume(a.taskId); gameEngine.markPaused(false); channel?.say(true, text) }
+            is dev.ciel.game.TaskMessage.Skip -> channel?.directive("Skip ${m.what}. Do not do it; continue with the rest.")
+            is dev.ciel.game.TaskMessage.Instruction -> channel?.directive(m.text)
+            is dev.ciel.game.TaskMessage.Question -> appScope.launch { gameEngine.answer(a.taskId, m.text) }
+        }
+        return true
+    }
     val communication = CommunicationEngine(
         AndroidContactDirectory(context) { settings.current.discordWebhooks },
         listOf(SmsSender(context), WhatsAppSender(context), TelegramSender(context), EmailSender(context),
@@ -152,6 +185,7 @@ class AppGraph(val context: Context) {
 
     init {
         taskLauncher.watchCompletions()
+        dev.ciel.app.overlay.ActivityNotch.start(context, this)
         loadUserSkills()
         // Keep subsystems in sync with settings.
         appScope.launch { settings.flow.map { it.memory }.distinctUntilChanged().collect { memory.updateSettings(it) } }

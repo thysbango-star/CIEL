@@ -1,17 +1,20 @@
 package dev.ciel.app.ui.components
 
 import androidx.compose.animation.animateColorAsState
-import androidx.compose.animation.core.LinearEasing
-import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.animateFloatAsState
-import androidx.compose.animation.core.infiniteRepeatable
-import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.layout.Box
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.mutableLongStateOf
+import androidx.compose.runtime.rememberUpdatedState
+import androidx.compose.runtime.setValue
+import androidx.compose.runtime.withFrameNanos
+import dev.ciel.app.design.MotionClock
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.drawWithCache
 import androidx.compose.ui.geometry.Offset
@@ -61,6 +64,9 @@ fun ringStyleFor(design: CielDesign) = when (design) {
  *  thinking — faster rings and orbiting symbols · analysing — extra orbit with data nodes ·
  *  executing — energy travels the ring, optional progress arc · speaking — pulse ·
  *  error/warning — warning ring · completed — confirmation ring · offline — dimmed.
+ *
+ * Motion is driven by [MotionClock]: every movement loops seamlessly and state changes blend
+ * (speeds ease, effects fade) instead of cutting.
  */
 @Composable
 fun CrystalCore(
@@ -75,31 +81,66 @@ fun CrystalCore(
     val a = look.appearance
     val core = ImageBitmap.imageResource(R.drawable.ciel_core)
     val filter = remember(a.theme, offline) { ColorFilter.colorMatrix(ColorMatrix(CrystalTint.matrix(a.theme, offline))) }
-    val stateColor by animateColorAsState(CielColors.forState(state), tween(500), label = "state")
+    val stateColor by animateColorAsState(CielColors.forState(state), tween(600), label = "state")
     val accent = Color(look.palette.accent)
     val danger = CielColors.Danger
     val success = CielColors.Green
     val lvl by animateFloatAsState(level, tween(120), label = "level")
     val seeds = remember { List(40) { Triple(Random.nextFloat(), Random.nextFloat(), Random.nextFloat()) } }
 
-    // One continuously advancing clock (seconds), frozen when animation is off.
-    val clock = rememberInfiniteTransition(label = "clock")
-    val tRaw by clock.animateFloat(0f, 600f, infiniteRepeatable(tween(600_000, easing = LinearEasing)), label = "t")
-    val t = if (a.animation == AnimationLevel.OFF) 0f else tRaw * (if (a.animation == AnimationLevel.SUBTLE) 0.5f else 1f)
-
     val busy = state == CielState.PROCESSING || state == CielState.ANALYSING || state == CielState.RESEARCHING || state == CielState.EXECUTING
-    val speed = a.ringSpeed * when (state) {
-        CielState.PROCESSING, CielState.ANALYSING -> 3.5f
-        CielState.RESEARCHING, CielState.EXECUTING -> 2.5f
-        CielState.LISTENING -> 1.6f
-        else -> 1f
+    // Effects fade in and out with the state rather than popping.
+    val fade = tween<Float>(450, easing = FastOutSlowInEasing)
+    val listenAmt by animateFloatAsState(if (state == CielState.LISTENING) 1f else 0f, fade, label = "listen")
+    val busyAmt by animateFloatAsState(if (busy) 1f else 0f, fade, label = "busy")
+    val analyseAmt by animateFloatAsState(if (state == CielState.ANALYSING) 1f else 0f, fade, label = "analyse")
+    val execAmt by animateFloatAsState(if (state == CielState.EXECUTING) 1f else 0f, fade, label = "exec")
+    val warnAmt by animateFloatAsState(if (state == CielState.WARNING || state == CielState.ERROR) 1f else 0f, fade, label = "warn")
+    val doneAmt by animateFloatAsState(if (state == CielState.COMPLETED) 1f else 0f, fade, label = "done")
+    val pulseAmp by animateFloatAsState(when (state) {
+        CielState.SPEAKING -> 0.05f
+        CielState.LISTENING -> 0.04f
+        CielState.PROCESSING, CielState.ANALYSING -> 0.025f
+        else -> 0.015f
+    }, tween(500), label = "pulseAmp")
+    val glowTarget = a.glow * (if (state == CielState.LISTENING || state == CielState.SPEAKING) 1.3f else 1f) * (if (offline) 0.4f else 1f)
+    val glow by animateFloatAsState(glowTarget, tween(500), label = "glow")
+    val progressAnim by animateFloatAsState(progress?.coerceIn(0f, 1f) ?: 0f, tween(500), label = "progress")
+
+    // Continuous clock. Off → a still frame; Subtle → half speed.
+    val clock = remember { MotionClock() }
+    var frame by remember { mutableLongStateOf(0L) }
+    val ringTarget by rememberUpdatedState(0.04 * a.ringSpeed * when (state) {
+        CielState.PROCESSING, CielState.ANALYSING -> 3.5
+        CielState.RESEARCHING, CielState.EXECUTING -> 2.5
+        CielState.LISTENING -> 1.6
+        else -> 1.0
+    })
+    val pulseTarget by rememberUpdatedState(when (state) {
+        CielState.SPEAKING -> 1.4
+        CielState.PROCESSING, CielState.ANALYSING -> 0.8
+        else -> 0.19
+    })
+    val timeScale = when (a.animation) { AnimationLevel.OFF -> 0.0; AnimationLevel.SUBTLE -> 0.5; AnimationLevel.FULL -> 1.0 }
+    LaunchedEffect(timeScale) {
+        if (timeScale == 0.0) return@LaunchedEffect
+        var last = 0L
+        while (true) {
+            withFrameNanos { now ->
+                if (last != 0L) clock.advance((now - last) / 1e9, ringTarget, pulseTarget, timeScale)
+                last = now
+                frame = now
+            }
+        }
     }
     val particleCount = (a.particles * seeds.size).toInt()
-    val glow = a.glow * (if (state == CielState.LISTENING || state == CielState.SPEAKING) 1.3f else 1f) * (if (offline) 0.4f else 1f)
 
     Canvas(modifier) {
+        frame // read → redraw every animation frame (draw phase only, no recomposition)
         val c = center
         val r = size.minDimension / 2f
+        val time = clock.time
+        val ring = clock.ring
         val ringColor = if (state == CielState.IDLE) accent else stateColor
 
         // Aura
@@ -107,87 +148,92 @@ fun CrystalCore(
 
         // Rings
         when (ringStyle) {
-            RingStyle.ORBITAL -> orbitals(c, r, ringColor, t * speed, state == CielState.EXECUTING)
-            RingStyle.ORBITAL_RUNES -> { orbitals(c, r, ringColor, t * speed, state == CielState.EXECUTING); runes(c, r * 0.95f, ringColor.copy(alpha = 0.5f), t * speed * 4f, 48) }
-            RingStyle.RUNES -> { drawCircle(ringColor.copy(alpha = 0.7f), r * 0.96f, c, style = Stroke(1.5.dp.toPx())); runes(c, r * 0.9f, ringColor, t * speed * 6f, 60) }
-            RingStyle.HEX -> hexes(c, r, ringColor, t * speed * 8f)
+            RingStyle.ORBITAL -> orbitals(c, r, ringColor, ring, clock.drift, execAmt)
+            RingStyle.ORBITAL_RUNES -> { orbitals(c, r, ringColor, ring, clock.drift, execAmt); runes(c, r * 0.95f, ringColor.copy(alpha = 0.5f), MotionClock.degrees(ring), 48) }
+            RingStyle.RUNES -> { drawCircle(ringColor.copy(alpha = 0.7f), r * 0.96f, c, style = Stroke(1.5.dp.toPx())); runes(c, r * 0.9f, ringColor, MotionClock.degrees(ring), 60) }
+            RingStyle.HEX -> hexes(c, r, ringColor, MotionClock.degrees(ring), -MotionClock.degrees(ring, 2) + 30f)
         }
 
         // Thinking / analysing symbols
-        if (busy) {
-            val n = if (state == CielState.ANALYSING) 10 else 6
+        if (busyAmt > 0.01f) {
+            val n = 10
             for (i in 0 until n) {
-                val ang = (t * speed * 0.6f + i.toFloat() / n) * 2 * PI.toFloat()
+                val odd = i % 2 == 1
+                // Odd symbols only belong to "analysing"; they fade with it.
+                val alpha = busyAmt * (if (odd) analyseAmt else 1f)
+                if (alpha < 0.01f) continue
+                val ang = (MotionClock.degrees(ring, 2) + i * 36f) * (PI.toFloat() / 180f)
                 val p = Offset(c.x + r * 0.78f * cos(ang), c.y + r * 0.78f * sin(ang) * 0.6f)
-                if (state == CielState.ANALYSING && i % 2 == 0) drawCircle(ringColor, 2.5.dp.toPx(), p)
-                else diamond(p, 4.dp.toPx(), ringColor.copy(alpha = 0.8f))
+                if (analyseAmt > 0.5f && i % 4 == 0) drawCircle(ringColor.copy(alpha = alpha), 2.5.dp.toPx(), p)
+                else diamond(p, 4.dp.toPx(), ringColor.copy(alpha = 0.8f * alpha))
             }
         }
 
-        // Listening ripples + voice wave
-        if (state == CielState.LISTENING) {
-            for (k in 1..3) {
-                val rr = r * (0.42f + 0.1f * k * (0.4f + lvl))
-                drawCircle(ringColor.copy(alpha = 0.3f / k), rr, c, style = Stroke(1.5.dp.toPx()))
+        // Listening ripples (continuously expanding, fading at both ends) + voice wave
+        if (listenAmt > 0.01f) {
+            for (k in 0 until 3) {
+                val f = MotionClock.frac(time * 0.45 + k / 3.0)
+                val rr = r * (0.44f + 0.4f * f.toFloat())
+                drawCircle(ringColor.copy(alpha = 0.35f * listenAmt * MotionClock.envelope(f)), rr, c, style = Stroke(1.5.dp.toPx()))
             }
             val bars = 36
             for (i in 0 until bars) {
                 val ang = i.toFloat() / bars * 2 * PI.toFloat()
-                val amp = r * 0.07f * (0.3f + lvl) * (0.5f + 0.5f * sin(t * 12f + i))
+                val amp = r * 0.07f * (0.3f + lvl) * (0.5f + 0.5f * sin((time * 1.9 * MotionClock.TAU).toFloat() + i * 0.9f)) * listenAmt
                 val r1 = r * 0.47f; val r2 = r1 + amp
-                drawLine(ringColor.copy(alpha = 0.7f), Offset(c.x + r1 * cos(ang), c.y + r1 * sin(ang)), Offset(c.x + r2 * cos(ang), c.y + r2 * sin(ang)), 2.dp.toPx())
+                drawLine(ringColor.copy(alpha = 0.7f * listenAmt), Offset(c.x + r1 * cos(ang), c.y + r1 * sin(ang)), Offset(c.x + r2 * cos(ang), c.y + r2 * sin(ang)), 2.dp.toPx())
             }
         }
 
         // Executing progress arc
-        if (state == CielState.EXECUTING && progress != null) {
-            drawArc(success, -90f, 360f * progress.coerceIn(0f, 1f), false, Offset(c.x - r * 0.98f, c.y - r * 0.98f), Size(r * 1.96f, r * 1.96f), style = Stroke(3.dp.toPx()))
+        if (execAmt > 0.01f && progress != null) {
+            drawArc(success.copy(alpha = execAmt), -90f, 360f * progressAnim, false, Offset(c.x - r * 0.98f, c.y - r * 0.98f), Size(r * 1.96f, r * 1.96f), style = Stroke(3.dp.toPx()))
         }
 
-        // The crystal image
-        val pulse = when (state) {
-            CielState.SPEAKING -> 1f + 0.05f * sin(t * 9f)
-            CielState.LISTENING -> 1.04f + 0.06f * lvl
-            CielState.PROCESSING, CielState.ANALYSING -> 1f + 0.025f * sin(t * 5f)
-            else -> 1f + 0.015f * sin(t * 1.2f)
-        }
-        val floatY = r * 0.025f * sin(t * 0.9f)
+        // The crystal image: breathing pulse + gentle float + slow spin (all periodic)
+        val pulse = 1f + pulseAmp * MotionClock.wave(clock.pulse) + 0.06f * lvl * listenAmt
+        val floatY = r * 0.025f * sin((time / 7.0 * MotionClock.TAU).toFloat())
         val coreSize = (r * 0.95f * pulse).toInt().coerceAtLeast(1)
-        withTransform({ rotate(t * 4f * a.ringSpeed, c); translate(0f, floatY) }) {
+        withTransform({ rotate(MotionClock.degrees(clock.drift), c); translate(0f, floatY) }) {
             drawImage(core, IntOffset.Zero, IntSize(core.width, core.height),
                 IntOffset((c.x - coreSize / 2f).toInt(), (c.y - coreSize / 2f).toInt()), IntSize(coreSize, coreSize),
                 alpha = if (offline) 0.55f else 1f, colorFilter = filter)
         }
 
-        // Particles
+        // Particles: drift outwards and fade in/out, so the loop has no visible restart
         for (i in 0 until particleCount) {
             val (px, py, pz) = seeds[i]
-            val ang = (px * 360f + t * 8f * (0.3f + pz)) * (PI.toFloat() / 180f)
-            val dist = r * (0.35f + ((py + t * 0.05f * pz) % 1f) * 0.62f)
-            drawCircle(ringColor.copy(alpha = 0.5f * (1f - dist / r).coerceIn(0f, 1f) * glow.coerceAtMost(1f)), 1.4.dp.toPx() * (0.6f + pz),
+            val ang = ((px * 360.0 + time * 8.0 * (0.3 + pz)) * PI / 180.0).toFloat()
+            val f = MotionClock.frac(py + time * 0.05 * (0.4 + pz))
+            val dist = r * (0.35f + f.toFloat() * 0.62f)
+            drawCircle(ringColor.copy(alpha = 0.55f * MotionClock.envelope(f) * glow.coerceAtMost(1f)), 1.4.dp.toPx() * (0.6f + pz),
                 Offset(c.x + dist * cos(ang), c.y + dist * sin(ang)))
         }
 
         // Status rings
-        when (state) {
-            CielState.COMPLETED -> drawCircle(success.copy(alpha = 0.8f), r * 0.98f, c, style = Stroke(2.5.dp.toPx()))
-            CielState.WARNING, CielState.ERROR -> drawCircle(danger.copy(alpha = 0.45f + 0.35f * sin(t * 6f).coerceAtLeast(0f)), r * 0.98f, c, style = Stroke(3.dp.toPx()))
-            else -> Unit
+        if (doneAmt > 0.01f) drawCircle(success.copy(alpha = 0.8f * doneAmt), r * 0.98f, c, style = Stroke(2.5.dp.toPx()))
+        if (warnAmt > 0.01f) {
+            val beat = 0.5f + 0.5f * sin((time * 0.9 * MotionClock.TAU).toFloat())
+            drawCircle(danger.copy(alpha = warnAmt * (0.35f + 0.4f * beat)), r * 0.98f, c, style = Stroke(3.dp.toPx()))
         }
     }
 }
 
-/** Three tilted orbital ellipses with a light travelling along each (energy while executing). */
-private fun DrawScope.orbitals(c: Offset, r: Float, color: Color, t: Float, executing: Boolean) {
+/** Three tilted orbital ellipses with a light travelling along each (a trail while executing). */
+private fun DrawScope.orbitals(c: Offset, r: Float, color: Color, ring: Double, drift: Double, exec: Float) {
     val rings = listOf(Triple(-18f, 0.96f, 0.30f), Triple(14f, 0.84f, 0.24f), Triple(62f, 0.74f, 0.20f))
     rings.forEachIndexed { i, (tilt, rx, ry) ->
         val w = r * rx; val h = r * ry
-        rotate(tilt + sin(t * 0.15f + i) * 6f, c) {
+        // The wobble uses whole cycles of the drift phase → seamless.
+        rotate(tilt + MotionClock.wave(drift * (i + 2) + i / 3.0) * 6f, c) {
             drawOval(color.copy(alpha = 0.55f), Offset(c.x - w, c.y - h), Size(w * 2, h * 2), style = Stroke(1.2.dp.toPx()))
-            val trail = if (executing) 6 else 1
-            for (k in 0 until trail) {
-                val ang = (t * (0.25f + i * 0.08f) * (if (executing) 3f else 1f) - k * 0.04f) * 2 * PI.toFloat() * (if (i % 2 == 0) 1 else -1)
-                drawCircle(Color.White.copy(alpha = 0.9f / (k + 1)), (2.6f - k * 0.3f).coerceAtLeast(0.8f) * density,
+            val dir = if (i % 2 == 0) 1f else -1f
+            val base = MotionClock.degrees(ring, 3 + i) * dir
+            for (k in 0 until 6) {
+                val alpha = if (k == 0) 0.9f else 0.9f / (k + 1) * exec
+                if (alpha < 0.02f) continue
+                val ang = (base - dir * k * 14f) * (PI.toFloat() / 180f)
+                drawCircle(Color.White.copy(alpha = alpha), (2.6f - k * 0.3f).coerceAtLeast(0.8f) * density,
                     Offset(c.x + w * cos(ang), c.y + h * sin(ang)))
             }
         }
@@ -205,7 +251,7 @@ private fun DrawScope.runes(c: Offset, r: Float, color: Color, rotation: Float, 
     }
 }
 
-private fun DrawScope.hexes(c: Offset, r: Float, color: Color, rotation: Float) {
+private fun DrawScope.hexes(c: Offset, r: Float, color: Color, outerRotation: Float, innerRotation: Float) {
     fun hex(radius: Float, rot: Float, alpha: Float) {
         val p = Path()
         for (i in 0..6) {
@@ -215,8 +261,8 @@ private fun DrawScope.hexes(c: Offset, r: Float, color: Color, rotation: Float) 
         }
         drawPath(p, color.copy(alpha = alpha), style = Stroke(1.4.dp.toPx()))
     }
-    hex(r * 0.95f, rotation * 0.3f, 0.85f)
-    hex(r * 0.8f, -rotation * 0.5f + 30f, 0.5f)
+    hex(r * 0.95f, outerRotation, 0.85f)
+    hex(r * 0.8f, innerRotation, 0.5f)
     for (i in 0 until 72) {
         val a = (i * 5f * PI / 180f).toFloat()
         val len = if (i % 6 == 0) 7.dp.toPx() else 3.dp.toPx()

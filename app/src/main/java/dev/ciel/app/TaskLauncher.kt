@@ -85,8 +85,7 @@ class TaskLauncher(private val graph: AppGraph) {
                         // First time: create the profile and ask the user to review the game's rules.
                         graph.gameEngine.profileFor(spec.appPackage)
                     }
-                    val outcome = graph.gameEngine.play(spec.appPackage, spec.objective, handle, limits.maxSteps)
-                    outcome.run?.result ?: TaskResult(false, outcome.message, false)
+                    graph.gameEngine.runObjective(spec.appPackage, spec.objective, handle, limits.maxSteps)
                 } else {
                     val agent = graph.screenAgentOrNull() ?: return@withTimeoutOrNull TaskResult(false, blockedReason() ?: "Screen control unavailable.", false)
                     val goal = if (spec.appLabel != null) "In ${spec.appLabel}: ${spec.objective}" else spec.objective
