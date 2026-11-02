@@ -142,7 +142,7 @@ class ConversationController(private val graph: AppGraph) {
                     is EngineEvent.Failure -> { finalText = "Notice. I could not complete that: ${ev.message}"; _state.value = CielState.ERROR }
                 }
             }
-            val reply = finalText ?: return@launch
+            val reply = finalText ?: run { onFinished?.invoke(); return@launch }
             dao.insert(MessageEntity(conversationId = conversationId, role = "ciel", text = reply, providerName = _provider.value, offline = offline))
             _streaming.value = ""
             _lastReply.value = reply
@@ -150,6 +150,9 @@ class ConversationController(private val graph: AppGraph) {
                 withContext(Dispatchers.Main) { graph.voice.speak(reply) { onFinished?.invoke() } }
             } else onFinished?.invoke()
         }
+        // A stop or a newer request cancels this turn; the caller (e.g. the wake-word service)
+        // must still get control back.
+        job?.invokeOnCompletion { cause -> if (cause != null) onFinished?.invoke() }
     }
 
     fun cancel() { job?.cancel(); _streaming.value = ""; _state.value = CielState.IDLE }
