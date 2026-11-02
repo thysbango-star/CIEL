@@ -14,6 +14,8 @@ fun main() {
     engineTests()
     setupTests()
     gameIntelligenceTests()
+    localProviderTests()
+    gameQueueTests()
     val failed = T.runAll()
     exitProcess(if (failed == 0) 0 else 1)
 }

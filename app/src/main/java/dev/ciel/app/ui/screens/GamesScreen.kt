@@ -141,7 +141,10 @@ private fun GameCard(p: GameProfile) {
             }
         }
         val allowed = p.policy == AutomationPolicy.ALLOWED_SINGLE_PLAYER || p.policy == AutomationPolicy.MENUS_ONLY
-        Text("Ask Ciel to", color = CielColors.Cyan, style = MaterialTheme.typography.titleMedium, modifier = Modifier.padding(top = Spacing.s))
+        androidx.compose.material3.Button(onClick = { graph.navigate("gamedash/${p.packageName}") }, modifier = Modifier.fillMaxWidth().padding(top = Spacing.s)) {
+            Text("Open gameplay manager")
+        }
+        Text("Or ask Ciel to", color = CielColors.Cyan, style = MaterialTheme.typography.titleMedium, modifier = Modifier.padding(top = Spacing.s))
         FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
             quickObjectives.forEach { q ->
                 AssistChip(enabled = allowed, onClick = {

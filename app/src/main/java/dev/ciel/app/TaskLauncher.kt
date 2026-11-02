@@ -99,12 +99,48 @@ class TaskLauncher(private val graph: AppGraph) {
 
     fun restart(taskId: String): String? = specs[taskId]?.let { launch(it) }
 
+    /**
+     * Starts the gameplay manager for a game: opens it, then runs the selected tasks in order.
+     * The time limit is longer than for single tasks (each task has its own stop rule anyway).
+     */
+    fun launchQueue(pkg: String, label: String, queue: dev.ciel.game.GameQueue): String =
+        graph.tasks.start("Gameplay manager: ${queue.tasks.size} task(s)", "game", title = "$label — gameplay manager", targetApp = pkg) { handle ->
+            withTimeoutOrNull(maxOf(30, graph.settings.current.tasks.timeoutMinutes * 3) * 60_000L) {
+                handle.step("Opening $label", pkg)
+                val o = graph.guardedDevice.perform(handle.id, handle.generation, DeviceAction.OpenApp(pkg), null)
+                if (o !is ActionOutcome.Done) return@withTimeoutOrNull TaskResult(false, "Couldn't open $label.", false)
+                delay(5000) // let the game load
+                graph.gameEngine.runQueue(pkg, queue, handle)
+            } ?: TaskResult(false, "Stopped at the time limit.", false)
+        }.also { checkEventWarnings(pkg) }
+
+    private val warnedEvents = java.util.Collections.synchronizedSet(HashSet<String>())
+
+    /** One notification per event when it ends within 24 hours (as read from the game). */
+    fun checkEventWarnings(pkg: String) {
+        graph.appScope.launch {
+            val urgent = graph.gameEngine.eventWarnings(pkg)
+            for (e in urgent) {
+                if (!warnedEvents.add(e.name + "|" + (e.endsAt?.div(3_600_000L) ?: 0))) continue
+                if (!graph.capabilities.has(android.Manifest.permission.POST_NOTIFICATIONS) && android.os.Build.VERSION.SDK_INT >= 33) continue
+                val ctx = graph.context
+                val hours = ((e.remainingMs() ?: 0) / 3_600_000L).coerceAtLeast(0)
+                val open = PendingIntent.getActivity(ctx, 11, Intent(ctx, dev.ciel.app.ui.MainActivity::class.java).putExtra(dev.ciel.app.ui.MainActivity.EXTRA_ROUTE, "gamedash/$pkg"), PendingIntent.FLAG_IMMUTABLE)
+                val n = NotificationCompat.Builder(ctx, Notifications.TASKS)
+                    .setSmallIcon(R.drawable.ic_ciel_mono).setContentTitle("Notice. Event ending soon")
+                    .setContentText("${e.name} ends in about $hours h (as shown in the game).")
+                    .setContentIntent(open).setAutoCancel(true).build()
+                runCatching { ctx.getSystemService(NotificationManager::class.java).notify(("ev" + e.name).hashCode(), n) }
+            }
+        }
+    }
+
     /** Posts a notification when a task finishes (if enabled), so the user knows while in another app. */
     fun watchCompletions() {
         graph.appScope.launch {
             val seen = HashSet<String>()
             graph.tasks.tasks.map { list -> list.filter { !it.isActive } }.distinctUntilChanged().collect { finished ->
-                finished.filter { seen.add(it.id) && it.status != TaskStatus.CANCELLED }.forEach { notify(it) }
+                finished.filter { seen.add(it.id) && it.status != TaskStatus.CANCELLED }.forEach { notify(it); it.targetApp?.let { p -> if (it.kind == "game") checkEventWarnings(p) } }
             }
         }
     }

@@ -63,6 +63,10 @@ data class GameProfile(
     val knowledge: GameKnowledgeBase = GameKnowledgeBase(),
     /** The user's rules for spending in-game resources. */
     val spending: SpendingPolicy = SpendingPolicy(),
+    /** Gameplay-manager queue, presets, and events read from the game. */
+    val queue: GameQueue = GameQueue(),
+    val presets: List<QueuePreset> = emptyList(),
+    val events: List<EventInfo> = emptyList(),
 ) {
     fun knowledgeSummary(): String = buildString {
         append("Game: $name ($packageName), category ${category.name.lowercase()}, version ${versionName ?: "unknown"}.\n")
@@ -110,6 +114,9 @@ object GameProfileCodec {
         "interfaceChangeSuspected" to p.interfaceChangeSuspected; "updatedAt" to p.updatedAt
         "knowledge" to p.knowledge.entries.map { GameKnowledgeBase.encode(it) }
         "spending" to SpendingPolicy.encode(p.spending)
+        "queue" to QueuePlanner.encode(p.queue)
+        "presets" to p.presets.map { pr -> json { "name" to pr.name; "queue" to QueuePlanner.encode(pr.queue) } }
+        "events" to p.events.map { QueuePlanner.encodeEvent(it) }
         "strategies" to p.strategies.map { s ->
             json { "objective" to s.objective; "steps" to s.steps; "successCount" to s.successCount; "failureCount" to s.failureCount; opt("gameVersion", s.gameVersion); "lastUsed" to s.lastUsed }
         }
@@ -140,6 +147,9 @@ object GameProfileCodec {
             knowledge = GameKnowledgeBase(o["knowledge"]?.array?.mapNotNull { GameKnowledgeBase.decode(it, imported = !trustPolicy) } ?: emptyList()),
             // Spending rules are personal: shared profiles never carry them.
             spending = if (trustPolicy) SpendingPolicy.decode(o["spending"]) else SpendingPolicy(),
+            queue = if (trustPolicy) QueuePlanner.decode(o["queue"]) else GameQueue(),
+            presets = if (trustPolicy) o["presets"]?.array?.mapNotNull { pr -> pr["name"]?.string?.let { QueuePreset(it, QueuePlanner.decode(pr["queue"])) } } ?: emptyList() else emptyList(),
+            events = o["events"]?.array?.map { QueuePlanner.decodeEvent(it) } ?: emptyList(),
             strategies = o["strategies"]?.array?.map { s ->
                 VerifiedStrategy(s["objective"]?.string ?: "", s["steps"]?.array?.mapNotNull { it.string } ?: emptyList(),
                     s["successCount"]?.int ?: 0, s["failureCount"]?.int ?: 0, s["gameVersion"]?.string, s["lastUsed"]?.long ?: 0)
@@ -214,85 +224,196 @@ class GameEngine(
         return PlayOutcome(run, run.result.report)
     }
 
-    /**
-     * Game Intelligence run (Parts 1–14): objective → prioritised plan → each step executed by the
-     * screen agent through [GamePlannerDecorator] (screen understanding, recovery, spending rules,
-     * non-blocking questions) → learning from every action → honest report.
-     */
-    suspend fun runObjective(packageName: String, objective: String, handle: dev.ciel.task.TaskHandle, maxSteps: Int = 60): dev.ciel.task.TaskResult {
+    /** Everything one game task needs: profile, session state, the decorated agent and rules. */
+    private inner class Run(val profile: GameProfile, val session: GameSessionState, val agent: ScreenAgent, val rules: String, val channel: TaskChannel) {
+        var readOnly = false
+    }
+
+    private suspend fun prepare(packageName: String, handle: dev.ciel.task.TaskHandle, title: String): Pair<Run?, String?> {
         val profile = profileFor(packageName)
         when (profile.policy) {
-            AutomationPolicy.UNREVIEWED -> return dev.ciel.task.TaskResult(false,
-                "${profile.name} has not been reviewed for automation. Open Ciel → Settings → Games, confirm the game's terms allow automation for your single-player play, then try again.", false)
-            AutomationPolicy.PROHIBITED -> return dev.ciel.task.TaskResult(false, "Automation is marked as prohibited for ${profile.name}.", false)
+            AutomationPolicy.UNREVIEWED -> return null to
+                "${profile.name} has not been reviewed for automation. Open Ciel → Settings → Games, confirm the game's terms allow automation for your single-player play, then try again."
+            AutomationPolicy.PROHIBITED -> return null to "Automation is marked as prohibited for ${profile.name}."
             else -> Unit
         }
-        val base = agentFactory() ?: return dev.ciel.task.TaskResult(false, "Game tasks need Ciel's accessibility service and a connected AI provider.", false)
+        val base = agentFactory() ?: return null to "Game tasks need Ciel's accessibility service (Settings → Accessibility → Ciel)."
         val entry = GameCatalog.entryFor(packageName)
-        val plan = ObjectivePlanner.plan(objective, profile.knowledge, entry?.systems ?: ObjectivePlanner.DEFAULT_SYSTEMS).let { p ->
-            if (profile.policy == AutomationPolicy.MENUS_ONLY) p.copy(steps = p.steps.filter { it.kind != StepKind.QUEST }) else p
-        }
         val channel = TaskChannel()
         channels[handle.id] = channel
         val session = GameSessionState(profile.name, profile.versionName, profile.knowledge, profile.spending,
             entry?.vocabulary ?: GameVocabulary.GENERIC, channel, confirmations, _activity, entry?.forbiddenAreas ?: GameCatalog.PVP)
         sessions[handle.id] = session
-        _activity.value = GameActivity(handle.id, profile.name, plan.title, 0, plan.steps.size, plan.steps.firstOrNull()?.title ?: "", "Starting", GameActivity.Status.RUNNING)
-        handle.plan(plan.steps.map { it.title }, "Each step proven on screen; report lists anything not done")
-        channel.say(false, "Plan: ${plan.steps.joinToString(" → ") { it.title }}")
-
-        val results = mutableListOf<StepResult>()
-        var currentReadOnly = false
-        val agent = base.withPlanner { inner -> GamePlannerDecorator(inner, session) { currentReadOnly } }
-        val budgets = plan.stepBudgets(maxSteps)
         val rules = "Rules: never buy anything or spend premium currency without the user's explicit approval; never play competitive PvP; " +
             "stop at human-verification checks; never type passwords. ${profile.spending.describe()}" +
             if (profile.policy == AutomationPolicy.MENUS_ONLY) " Restriction: menus and rewards only; do not play levels or battles." else ""
+        lateinit var run: Run
+        val agent = base.withPlanner { inner -> GamePlannerDecorator(inner, session) { run.readOnly } }
+        run = Run(profile, session, agent, rules, channel)
+        _activity.value = GameActivity(handle.id, profile.name, title, 0, 0, "", "Starting", GameActivity.Status.RUNNING)
+        return run to null
+    }
+
+    /** Runs one plan step with the screen agent; local-first decisions, learning, live status. */
+    private suspend fun runOneStep(r: Run, runStep: suspend (String, dev.ciel.task.AgentOptions) -> dev.ciel.task.AgentRun,
+                                   step: GamePlanStep, budget: Int, context: String): StepResult {
+        r.readOnly = step.readOnly
+        r.session.skipReason = null
+        r.session.currentStep = step
+        r.session.local.reset()
+        val targets = mutableListOf<String>()
+        val run = runStep("In ${r.profile.name}: ${step.objective}", dev.ciel.task.AgentOptions(
+            maxSteps = budget, includeScreenshots = screenshotsAllowed(), settleDelayMs = 1500,
+            knowledge = "Game: ${r.profile.name} (version ${r.profile.versionName ?: "unknown"}). $context\n${r.rules}\n" +
+                "What Ciel has learned (verify on screen before relying on it):\n" + r.session.knowledge.briefing(step.system + " " + step.title),
+            directives = { r.channel.directives.takeLast(8) },
+            onObserve = { _activity.update { a -> a?.copy(currentAction = if (a.status == GameActivity.Status.WAITING) a.currentAction else "Reading the screen") } },
+            onStep = { e: dev.ciel.task.StepEvent ->
+                r.session.learn(e)
+                val t = e.target
+                if (e.changed && t != null) targets.add(t)
+            },
+        ))
+        val ok = run.result.success && run.result.verified
+        r.session.recordStep(step, ok, run.result.report, targets)
+        learn(r.profile.copy(knowledge = r.session.knowledge), step.title, run)
+        return StepResult(step, ok, run.result.verified, run.result.report, r.session.skipReason)
+    }
+
+    private suspend fun finish(packageName: String, r: Run, handle: dev.ciel.task.TaskHandle, extra: (GameProfile) -> GameProfile = { it }) = withContext(NonCancellable) {
+        // Knowledge (and events) are kept even if the task is stopped part-way.
+        val latest = profiles.get(packageName) ?: r.profile
+        val events = (latest.events.filter { e -> r.session.events.none { it.name.equals(e.name, true) } } + r.session.events)
+            .filter { it.endsAt == null || it.endsAt > System.currentTimeMillis() - 86_400_000L }.takeLast(20)
+        profiles.save(extra(latest.copy(knowledge = r.session.knowledge, events = events, updatedAt = System.currentTimeMillis())))
+        r.channel.clearQuestions()
+        sessions.remove(handle.id)
+    }
+
+    /**
+     * Game Intelligence run: objective → prioritised plan → each step executed by the screen agent
+     * through [GamePlannerDecorator] (local-first decisions, screen understanding, recovery,
+     * spending rules, non-blocking questions) → learning from every action → honest report.
+     */
+    suspend fun runObjective(packageName: String, objective: String, handle: dev.ciel.task.TaskHandle, maxSteps: Int = 60): dev.ciel.task.TaskResult {
+        val entry = GameCatalog.entryFor(packageName)
+        val profile0 = profileFor(packageName)
+        val plan = ObjectivePlanner.plan(objective, profile0.knowledge, entry?.systems ?: ObjectivePlanner.DEFAULT_SYSTEMS).let { p ->
+            if (profile0.policy == AutomationPolicy.MENUS_ONLY) p.copy(steps = p.steps.filter { it.kind != StepKind.QUEST }) else p
+        }
+        val (r, error) = prepare(packageName, handle, plan.title)
+        if (r == null) return dev.ciel.task.TaskResult(false, error!!, false)
+        _activity.update { it?.copy(stepCount = plan.steps.size, stepTitle = plan.steps.firstOrNull()?.title ?: "") }
+        handle.plan(plan.steps.map { it.title }, "Each step proven on screen; report lists anything not done")
+        r.channel.say(false, "Plan: ${plan.steps.joinToString(" → ") { it.title }}")
+        val results = mutableListOf<StepResult>()
+        val budgets = plan.stepBudgets(maxSteps)
         try {
-            agent.session(handle) { runStep ->
+            r.agent.session(handle) { runStep ->
                 for ((i, step) in plan.steps.withIndex()) {
                     handle.checkpoint()
-                    if (session.blockerReason != null) break
-                    currentReadOnly = step.readOnly
-                    session.skipReason = null
-                    _activity.update { it?.copy(stepIndex = i, stepTitle = step.title, currentAction = "Starting: ${step.title}") }
-                    val targets = mutableListOf<String>()
-                    val run = runStep("In ${profile.name}: ${step.objective}", dev.ciel.task.AgentOptions(
-                        maxSteps = budgets[i], includeScreenshots = screenshotsAllowed(), settleDelayMs = 1500,
-                        knowledge = "Game: ${profile.name} (version ${profile.versionName ?: "unknown"}). Overall objective from the user: $objective\n" +
-                            "Current step ${i + 1} of ${plan.steps.size}: ${step.title}.\n$rules\nWhat Ciel has learned (verify on screen before relying on it):\n" +
-                            session.knowledge.briefing(step.system + " " + step.title + " " + objective),
-                        directives = { channel.directives.takeLast(8) },
-                        onObserve = { _activity.update { a -> a?.copy(currentAction = if (a.status == GameActivity.Status.WAITING) a.currentAction else "Reading the screen") } },
-                        onStep = { e: dev.ciel.task.StepEvent ->
-                            session.learn(e)
-                            val t = e.target
-                            if (e.changed && t != null) targets.add(t)
-                        },
-                    ))
-                    val ok = run.result.success && run.result.verified
-                    results += StepResult(step, ok, run.result.verified, run.result.report, session.skipReason)
-                    session.recordStep(step, ok, run.result.report, targets)
-                    if (ok) handle.markStepDone(i)
-                    learn(profile.copy(knowledge = session.knowledge), step.title, run)
+                    if (r.session.blockerReason != null) break
+                    _activity.update { it?.copy(stepIndex = i, stepTitle = step.title, currentAction = "Starting: ${step.title}", nextAction = plan.steps.getOrNull(i + 1)?.title) }
+                    val res = runOneStep(r, runStep, step, budgets[i], "Overall objective from the user: $objective. Current step ${i + 1} of ${plan.steps.size}: ${step.title}.")
+                    results += res
+                    if (res.success) handle.markStepDone(i)
                 }
             }
-        } finally {
-            // Knowledge is kept even if the task is stopped part-way.
-            withContext(NonCancellable) {
-                val latest = profiles.get(packageName) ?: profile
-                profiles.save(latest.copy(knowledge = session.knowledge, updatedAt = System.currentTimeMillis()))
-                channel.clearQuestions()
-                sessions.remove(handle.id)
-            }
-        }
-        channel.questions.value.forEach { session.addAttention("Unanswered: ${it.question}") }
-        val report = GameTaskReport.build(profile.name, results, plan.steps.size, session.attention, session.blockerReason)
+        } finally { finish(packageName, r, handle) }
+        r.channel.questions.value.forEach { r.session.addAttention("Unanswered: ${it.question}") }
+        val report = GameTaskReport.build(r.profile.name, results, plan.steps.size, r.session.attention + usageLine(r.session), r.session.blockerReason)
         val allDone = results.size == plan.steps.size && results.all { it.success }
         _activity.update { it?.copy(status = if (allDone) GameActivity.Status.FINISHED else GameActivity.Status.FAILED, currentAction = if (allDone) "Finished" else "Finished with items needing attention", finalReport = report.text(), needsAttention = !allDone) }
-        channel.say(false, report.text())
+        r.channel.say(false, report.text())
         return dev.ciel.task.TaskResult(allDone, report.text(), verified = allDone)
     }
+
+    private fun usageLine(s: GameSessionState) = "Decisions: ${s.stats.localDecisions} made on the phone, ${s.stats.aiCalls} by the AI model" +
+        (if (!s.stats.aiAvailable) " (AI became unavailable; continued locally)" else "") + "."
+
+    /** Asks the running queue to move on to its next task. */
+    fun skipCurrentTask(taskId: String) { sessions[taskId]?.skipTask = true; channels[taskId]?.say(true, "Skip this task") }
+
+    /**
+     * Gameplay manager: runs the user's selected tasks in order (events first and other sensible
+     * reordering unless the order is locked), repeating tasks until their stop rule, and reports
+     * per task. Event deadlines read during the run are saved for the dashboard.
+     */
+    suspend fun runQueue(packageName: String, queue: GameQueue, handle: dev.ciel.task.TaskHandle, maxStepsPerRun: Int = 25): dev.ciel.task.TaskResult {
+        val profile0 = profileFor(packageName)
+        var ordered = QueuePlanner.order(queue, profile0.events)
+        if (ordered.tasks.isEmpty()) return dev.ciel.task.TaskResult(false, "No tasks selected.", false)
+        val (r, error) = prepare(packageName, handle, "Gameplay manager")
+        if (r == null) return dev.ciel.task.TaskResult(false, error!!, false)
+        val states = LinkedHashMap<String, GameActivity.QueueItem>()
+        ordered.tasks.forEach { states[it.id] = GameActivity.QueueItem(it.label, GameActivity.ItemState.WAITING) }
+        fun publish() = r.session.queue(states.values.toList())
+        publish()
+        (ordered.reasons + ordered.recommendations).forEach { r.channel.say(false, it) }
+        handle.plan(ordered.tasks.map { it.label }, "Each task ends at its stop rule; results verified on screen")
+        _activity.update { it?.copy(stepCount = ordered.tasks.size) }
+        val lines = mutableListOf<String>()
+        var remaining = ordered.tasks
+        var index = 0
+        try {
+            r.agent.session(handle) { runStep ->
+                while (remaining.isNotEmpty()) {
+                    handle.checkpoint()
+                    if (r.session.blockerReason != null) break
+                    val task = remaining.first(); remaining = remaining.drop(1)
+                    r.session.skipTask = false
+                    states[task.id] = GameActivity.QueueItem(task.label, GameActivity.ItemState.RUNNING); publish()
+                    _activity.update { it?.copy(stepIndex = index, stepTitle = task.label, currentAction = "Starting: ${task.label}", nextAction = remaining.firstOrNull()?.label) }
+                    val steps = QueuePlanner.steps(task, r.session.knowledge)
+                    var runs = 0; var verifiedRuns = 0; var stop: String? = null
+                    loop@ while (runs < task.maxRuns) {
+                        for (step in steps) {
+                            handle.checkpoint()
+                            val res = runOneStep(r, runStep, step, maxStepsPerRun,
+                                "Task: ${task.label}" + (if (task.type.repeating) " (run ${runs + 1}, stop rule: ${task.stop.label}${if (task.stop == StopKind.RUNS) " ${task.number}" else ""})" else "") + ".")
+                            if (res.skippedReason != null) { stop = res.skippedReason; break@loop }
+                            if (!res.success) { stop = res.summary.lineSequence().firstOrNull()?.take(160) ?: "not completed"; if (task.type.repeating) break@loop }
+                            if (res.success && step.kind != StepKind.INSPECT) verifiedRuns++
+                        }
+                        runs++
+                        if (!task.type.repeating || task.stop == StopKind.ONCE) break
+                    }
+                    val state = when {
+                        r.session.skipTask || stop == "Skipped by you." -> GameActivity.ItemState.SKIPPED
+                        stop != null && verifiedRuns == 0 -> GameActivity.ItemState.BLOCKED
+                        else -> GameActivity.ItemState.DONE
+                    }
+                    val note = if (task.type.repeating) "$verifiedRuns run(s) verified" + (stop?.let { "; stopped: $it" } ?: "") else stop
+                    states[task.id] = GameActivity.QueueItem(task.label, state, note); publish()
+                    lines += "${state.symbol} ${task.label}" + (note?.let { " — $it" } ?: "")
+                    handle.markStepDone(index); index++
+                    // After reading events, re-order what's left so expiring events come first.
+                    if (task.type == TaskType.EVENT_SCAN && r.session.events.isNotEmpty() && queue.prioritiseEvents && !queue.lockedOrder) {
+                        val again = QueuePlanner.order(queue.copy(tasks = remaining), r.session.events)
+                        if (again.tasks != remaining) { remaining = again.tasks; again.reasons.forEach { r.channel.say(false, it) } }
+                    }
+                }
+            }
+        } finally { finish(packageName, r, handle) { it.copy(queue = queue) } }
+        r.session.events.filter { it.urgency() == Urgency.HIGH }.forEach { r.session.addAttention("Event \"${it.name}\" ends soon (${it.shownText} when read).") }
+        val done = states.values.count { it.state == GameActivity.ItemState.DONE }
+        val allDone = done == ordered.tasks.size
+        val text = buildString {
+            append("**${r.profile.name} — ").append(if (allDone) "Queue complete" else "Queue finished: $done of ${ordered.tasks.size} tasks done").append("**\n\n")
+            lines.forEach { append(it).append('\n') }
+            if (r.session.attention.isNotEmpty()) { append("\nNeeds attention:\n"); r.session.attention.forEach { append("- ").append(it).append('\n') } }
+            r.session.blockerReason?.let { append("\nStopped early: ").append(it).append('\n') }
+            append("\n").append(usageLine(r.session))
+        }.trim()
+        _activity.update { it?.copy(status = if (allDone) GameActivity.Status.FINISHED else GameActivity.Status.FAILED, currentAction = if (allDone) "Queue complete" else "Queue finished — some tasks need attention",
+            finalReport = text, needsAttention = !allDone, nextAction = null) }
+        r.channel.say(false, text)
+        return dev.ciel.task.TaskResult(allDone, text, verified = allDone)
+    }
+
+    /** Events from the profile that deserve a warning now (deduplicated by the caller). */
+    suspend fun eventWarnings(packageName: String, now: Long = System.currentTimeMillis()): List<EventInfo> =
+        profiles.get(packageName)?.events?.filter { it.urgency(now) == Urgency.HIGH } ?: emptyList()
 
     /**
      * Context for answering "what are you doing / why" while a task runs: live state, plan,

@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Plain HTTP is permitted at the OS level so Ciel can reach servers on the user's own network
+  (Ollama, NIM, LM Studio on a PC). Ciel itself refuses plain http:// to any non-private address
+  (see InferenceLocation.plainHttpAllowed), so keys and prompts never cross the internet unencrypted.
+-->
+<network-security-config>
+    <base-config cleartextTrafficPermitted="true">
+        <trust-anchors>
+            <certificates src="system" />
+        </trust-anchors>
+    </base-config>
+</network-security-config>

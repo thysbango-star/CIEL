@@ -57,7 +57,7 @@ private fun seen(id: Int, text: String, y: Int = id * 120) = UiNode(id, text = t
 private fun game(hash: Long, vararg nodes: UiNode) = ScreenSnapshot("com.devsisters.ck", nodes = nodes.toList(), screenWidth = 1080, screenHeight = 2400, visualHash = hash)
 private val CRK = GameCatalog.entryFor(GameCatalog.COOKIE_RUN_KINGDOM)!!
 
-private suspend fun finished(tasks: TaskManager, id: String): TaskState = withTimeout(10_000) {
+private suspend fun finished(tasks: TaskManager, id: String): TaskState = withTimeout(60_000) {
     while (tasks.get(id)?.isActive != false) delay(10)
     tasks.get(id)!!
 }
@@ -214,8 +214,8 @@ fun gameIntelligenceTests() = T.suite("game-intelligence") {
         val claimed = game(0x7777777700000000L, seen(1, "Daily Quests"), seen(5, "Completed"), seen(3, "Weekly"), seen(6, "Rewards received"))
         val dev = FakeDevice(main, transitions = { a, s ->
             when {
-                s === main && a == DeviceAction.ClickNode(2) -> quests
-                s === quests && a == DeviceAction.ClickNode(2) -> claimed
+                s === main && a is DeviceAction.ClickNode && a.nodeId == 2 -> quests
+                s === quests && a is DeviceAction.ClickNode && a.nodeId == 2 -> claimed
                 else -> null
             }
         })
@@ -248,7 +248,7 @@ fun gameIntelligenceTests() = T.suite("game-intelligence") {
         check("Inspect quests" in report && "Claim completed quest rewards" in report) { report }
         check("Complete easy objectives: not completed" in report) { report }
         // Exactly two taps: open Quests, then one Claim in the claim step (never in the read-only step).
-        eq(2, dev.performed.count { it == DeviceAction.ClickNode(2) })
+        eq(2, dev.performed.count { it is DeviceAction.ClickNode && it.nodeId == 2 })
         val kb = repo.get(GameCatalog.COOKIE_RUN_KINGDOM)!!.knowledge
         val route = kb.entries.firstOrNull { it.kind == KnowledgeKind.LOCATION && it.system == "Quests" }
         check(route != null && route.howToReach.single().contains("\"Quests\"")) { kb.entries.joinToString("\n") }

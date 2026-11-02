@@ -29,6 +29,8 @@ data class HttpResponse(val code: Int, val body: String, val headers: Map<String
 sealed class NetworkError(message: String, cause: Throwable? = null) : IOException(message, cause) {
     class Offline(cause: Throwable?) : NetworkError("No internet connection or host unreachable.", cause)
     class Timeout(cause: Throwable?) : NetworkError("The request timed out.", cause)
+    /** Reached nothing: no route, refused, reset, blocked by the OS (e.g. plain-HTTP policy). */
+    class Unreachable(detail: String, cause: Throwable?) : NetworkError(detail, cause)
     class Http(val code: Int, val responseBody: String) :
         NetworkError("Server returned HTTP $code: ${responseBody.take(300)}")
 }
@@ -60,7 +62,13 @@ class UrlConnectionTransport : HttpTransport {
         } catch (e: SocketTimeoutException) {
             throw NetworkError.Timeout(e)
         } catch (e: java.net.ConnectException) {
-            throw NetworkError.Offline(e)
+            throw NetworkError.Unreachable("Connection refused by ${host(request.url)} — is the server running and reachable from this phone?", e)
+        } catch (e: NetworkError) {
+            throw e
+        } catch (e: IOException) {
+            // Every other I/O failure (no route to host, connection reset, Android's cleartext
+            // policy, TLS errors) is classified here, so it never escapes as an unexpected crash.
+            throw classify(request.url, e)
         } finally {
             conn?.disconnect()
         }
@@ -87,11 +95,29 @@ class UrlConnectionTransport : HttpTransport {
         } catch (e: SocketTimeoutException) {
             throw NetworkError.Timeout(e)
         } catch (e: java.net.ConnectException) {
-            throw NetworkError.Offline(e)
+            throw NetworkError.Unreachable("Connection refused by ${host(request.url)} — is the server running and reachable from this phone?", e)
+        } catch (e: NetworkError) {
+            throw e
+        } catch (e: IOException) {
+            // Every other I/O failure (no route to host, connection reset, Android's cleartext
+            // policy, TLS errors) is classified here, so it never escapes as an unexpected crash.
+            throw classify(request.url, e)
         } finally {
             conn?.disconnect()
         }
     }.flowOn(Dispatchers.IO)
+
+    private fun host(url: String) = runCatching { URL(url).host }.getOrDefault(url)
+
+    private fun classify(url: String, e: IOException): NetworkError {
+        val m = (e.message ?: "").lowercase()
+        return when {
+            "cleartext" in m -> NetworkError.Unreachable("Android blocked plain HTTP to ${host(url)}.", e)
+            "no route" in m || "unreachable" in m || "ehostunreach" in m -> NetworkError.Unreachable("No route to ${host(url)}: the phone cannot reach that address on this network.", e)
+            "ssl" in m || "certificate" in m || "handshake" in m -> NetworkError.Unreachable("Secure connection to ${host(url)} failed (${e.message?.take(80)}).", e)
+            else -> NetworkError.Unreachable("Network error talking to ${host(url)}: ${e.message?.take(120) ?: e::class.simpleName}", e)
+        }
+    }
 
     private fun open(request: HttpRequest): HttpURLConnection {
         val conn = URL(request.url).openConnection() as HttpURLConnection

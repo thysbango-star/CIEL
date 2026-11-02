@@ -59,6 +59,9 @@ private val choices = listOf(
     "openai" to "OpenAI",
     "openrouter" to "OpenRouter",
     "groq" to "Groq",
+    "nvidia" to "NVIDIA",
+    "ollama" to "Ollama (my own AI)",
+    "nim" to "NVIDIA NIM (self-hosted)",
     "custom" to "Other / my own server",
 )
 
@@ -123,10 +126,12 @@ fun ConnectionsScreen(onDeveloper: () -> Unit) {
             }
             val keyUrl = preset?.let { ProviderPresets.byKey(it)?.keyUrl }?.takeIf { it.isNotBlank() }
             if (keyUrl != null) TextButton(onClick = { context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(keyUrl))) }) { Text("Get a key from ${choices.first { it.first == preset }.second} ↗") }
-            if (preset == "custom") OutlinedTextField(customUrl, { customUrl = it.trim() }, label = { Text("Server address (e.g. http://192.168.1.10:11434/v1)") },
+            if (preset == "ollama") OllamaFinder(customUrl) { customUrl = it }
+            if (preset == "custom" || preset == "nim") OutlinedTextField(customUrl, { customUrl = it.trim() },
+                label = { Text(if (preset == "nim") "NIM address (e.g. http://192.168.1.10:8000/v1)" else "Server address (e.g. http://192.168.1.10:1234/v1)") },
                 singleLine = true, modifier = Modifier.fillMaxWidth())
-            OutlinedTextField(
-                key, { key = it.trim() }, label = { Text(if (preset == "custom") "API key (optional)" else "API key") }, singleLine = true,
+            if (preset != "ollama") OutlinedTextField(
+                key, { key = it.trim() }, label = { Text(if (preset == "custom" || preset == "nim") "API key (optional)" else "API key") }, singleLine = true,
                 visualTransformation = if (showKey) VisualTransformation.None else PasswordVisualTransformation(),
                 keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
                 trailingIcon = { IconButton(onClick = { showKey = !showKey }) { Icon(if (showKey) Icons.Filled.VisibilityOff else Icons.Filled.Visibility, if (showKey) "Hide key" else "Show key") } },
@@ -135,11 +140,16 @@ fun ConnectionsScreen(onDeveloper: () -> Unit) {
             Text("Your key is encrypted on this phone and sent only to the provider it belongs to. What you ask Ciel is processed by that provider under its own privacy policy.",
                 color = CielColors.Muted, style = MaterialTheme.typography.labelSmall)
             Row(verticalAlignment = Alignment.CenterVertically) {
-                Button(enabled = !busy && (key.isNotBlank() || preset == "custom"), onClick = {
+                Button(enabled = !busy && (key.isNotBlank() || ((preset == "custom" || preset == "nim" || preset == "ollama") && customUrl.isNotBlank())), onClick = {
                     busy = true; result = null
                     scope.launch {
                         val connId = UUID.randomUUID().toString().take(8)
-                        val r = graph.connectionWizard.connect(key, connId, preset, customUrl) { s -> status = s }
+                        // Never let a connection problem crash the app: every error becomes a readable notice.
+                        val r = try {
+                            graph.connectionWizard.connect(key, connId, preset, customUrl) { s -> status = s }
+                        } catch (e: kotlinx.coroutines.CancellationException) { throw e } catch (e: Exception) {
+                            ConnectResult.Failure("Connection failed.", e.message ?: e::class.simpleName ?: "Unknown error")
+                        }
                         if (r is ConnectResult.Success) {
                             r.configs.forEach { c -> if (key.isNotBlank()) graph.vault.put(KeyVault.providerKeyName(c.id), key) }
                             graph.settings.update { s ->
@@ -192,3 +202,44 @@ fun ConnectionsScreen(onDeveloper: () -> Unit) {
             dismissButton = { TextButton(onClick = { confirmRemove = null }) { Text("Cancel") } })
     }
 }
+
+/** Ollama: search this phone and the Wi-Fi network for a server, or type its address. */
+@Composable
+private fun OllamaFinder(address: String, onAddress: (String) -> Unit) {
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
+    var scanning by remember { mutableStateOf(false) }
+    var progress by remember { mutableStateOf("") }
+    var found by remember { mutableStateOf<List<String>?>(null) }
+    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+        Text("Ollama runs on your PC (or on this phone). No key needed.", color = CielColors.Muted)
+        Button(enabled = !scanning, onClick = {
+            scanning = true; found = null
+            scope.launch {
+                val client = dev.ciel.ai.OllamaClient(CielApplication.graph.http)
+                val hosts = dev.ciel.ai.OllamaDiscovery.candidates(phoneIpv4(context), listOf(address))
+                found = runCatching {
+                    dev.ciel.ai.OllamaDiscovery.scan(client, hosts) { d, t -> progress = "Searching… $d / $t" }
+                }.getOrDefault(emptyList())
+                found?.firstOrNull()?.let(onAddress)
+                scanning = false; progress = ""
+            }
+        }) { Text(if (scanning) "Searching your network…" else "Find Ollama on my Wi-Fi") }
+        if (scanning) Text(progress, color = CielColors.Cyan, style = MaterialTheme.typography.labelSmall)
+        found?.let { list ->
+            if (list.isEmpty()) Text("No Ollama server answered. On the PC set OLLAMA_HOST=0.0.0.0, restart Ollama, allow port 11434 in the firewall, keep both on the same Wi-Fi — or type the PC's address below.",
+                color = CielColors.Amber, style = MaterialTheme.typography.bodyMedium)
+            else FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                list.forEach { h -> FilterChip(selected = address == h, onClick = { onAddress(h) }, label = { Text(h.removePrefix("http://")) }) }
+            }
+        }
+        OutlinedTextField(address, { onAddress(it.trim()) }, label = { Text("PC address (e.g. 192.168.1.10)") }, singleLine = true, modifier = Modifier.fillMaxWidth())
+    }
+}
+
+/** This phone's IPv4 address on the current network, used to search the local subnet. */
+private fun phoneIpv4(context: android.content.Context): String? = runCatching {
+    val cm = context.getSystemService(android.net.ConnectivityManager::class.java)
+    cm.getLinkProperties(cm.activeNetwork)?.linkAddresses
+        ?.map { it.address }?.firstOrNull { it is java.net.Inet4Address && !it.isLoopbackAddress }?.hostAddress
+}.getOrNull()

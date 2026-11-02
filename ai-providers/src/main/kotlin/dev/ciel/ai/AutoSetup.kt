@@ -15,6 +15,7 @@ object KeyDetector {
     fun candidates(apiKey: String): List<ProviderPreset> {
         val k = apiKey.trim()
         val key = when {
+            k.startsWith(Nvidia.KEY_PREFIX) -> "nvidia"
             k.startsWith("sk-or-") -> "openrouter"
             k.startsWith("gsk_") -> "groq"
             k.startsWith("AIza") -> "gemini"
@@ -55,6 +56,7 @@ object ModelPicker {
         if (nonChat.any { n.contains(it) }) return false
         return when (presetKey) {
             "gemini" -> n.startsWith("gemini")
+            "nvidia" -> Nvidia.isChat(n)
             "openai" -> (n.startsWith("gpt-") || Regex("^o\\d").containsMatchIn(n) || n.startsWith("chatgpt")) && !n.contains("instruct")
             else -> true
         }
@@ -67,10 +69,12 @@ object ModelPicker {
             "gemini" -> true
             "openai" -> n.startsWith("gpt-4o") || n.startsWith("gpt-4.1") || n.startsWith("gpt-5") || Regex("^o[34]").containsMatchIn(n)
             "groq" -> n.contains("vision") || n.contains("llama-4") || n.contains("scout")
+            "nvidia" -> Nvidia.visionOf(n)
             else -> null
         }
         val tools = m.supportsTools ?: when (presetKey) {
             "gemini", "openai", "groq" -> true
+            "nvidia" -> Nvidia.toolsOf(n)
             else -> null
         }
         return m.copy(supportsVision = vision, supportsTools = tools)
@@ -140,14 +144,18 @@ class ConnectionWizard(
             else -> KeyDetector.candidates(key).firstOrNull()
                 ?: return ConnectResult.NeedsProvider("I couldn't tell which service this key belongs to. Please choose the provider.")
         }
-        if (key.isEmpty() && preset.key != "custom") return ConnectResult.Failure("No API key entered.", "Paste the key you copied from ${preset.displayName}.")
-        val baseUrl = (if (preset.key == "custom") customBaseUrl?.trim()?.takeIf { it.startsWith("http") } else null) ?: preset.baseUrl
-        if (preset.key == "custom" && customBaseUrl.isNullOrBlank()) return ConnectResult.Failure("A custom service needs its address.", "Enter the server address, e.g. http://192.168.1.10:11434/v1")
+        val local = preset.key == "custom" || preset.key == "nim" || preset.key == "ollama"
+        if (preset.key == "ollama") return connectOllama(customBaseUrl ?: "", connectionId, onStatus)
+        if (key.isEmpty() && !local) return ConnectResult.Failure("No API key entered.", "Paste the key you copied from ${preset.displayName}.")
+        val baseUrl = (if (local) customBaseUrl?.trim()?.takeIf { it.startsWith("http") } else null) ?: preset.baseUrl
+        if (local && customBaseUrl.isNullOrBlank()) return ConnectResult.Failure("This service needs its address.", "Enter the server address, e.g. ${preset.baseUrl}")
+        if (!InferenceLocation.plainHttpAllowed(baseUrl)) return ConnectResult.Failure("Refusing an unencrypted internet address.",
+            "Plain http:// is only allowed on your own network (e.g. 192.168.x.x). Use https:// for servers on the internet.")
 
         val base = ProviderConfig(
             id = "$connectionId:probe", displayName = preset.displayName, protocol = preset.protocol, baseUrl = baseUrl,
             model = preset.suggestedModel,
-            authStyle = if (preset.key == "custom" && key.isEmpty()) AuthStyle.NONE else preset.authStyle,
+            authStyle = if (local && key.isEmpty()) AuthStyle.NONE else if (local) AuthStyle.BEARER else preset.authStyle,
             authHeaderName = if (preset.protocol == ProtocolKind.GEMINI_GENERATE_CONTENT) "x-goog-api-key" else null,
             supportsTools = true, dataPolicyAcknowledged = true,
         )
@@ -157,6 +165,9 @@ class ConnectionWizard(
             factory(base, key, transport).listModels()
         } catch (e: ProviderException) {
             return failure(e, preset)
+        } catch (e: Exception) {
+            if (e is kotlinx.coroutines.CancellationException) throw e
+            return ConnectResult.Failure("Couldn't reach ${preset.displayName}.", e.message ?: e::class.simpleName ?: "Unknown error")
         }
         if (models.isEmpty()) return ConnectResult.Failure("${preset.displayName} returned no models for this key.", "Check that the key is active and has access to models in your ${preset.displayName} account.")
 
@@ -198,6 +209,9 @@ class ConnectionWizard(
                 return m
             } catch (e: ProviderException) {
                 log += "${m.id} unavailable: ${e.message?.take(120)}"
+            } catch (e: Exception) {
+                if (e is kotlinx.coroutines.CancellationException) throw e
+                log += "${m.id} unavailable: ${e.message?.take(120)}"
             }
         }
         return null
@@ -208,7 +222,69 @@ class ConnectionWizard(
             ConnectResult.Failure("${preset.displayName} rejected this key.", "Copy the key again from ${preset.keyUrl.ifBlank { "your provider" }} — make sure nothing is missing at the start or end.")
         e.isRateLimit -> ConnectResult.Failure("${preset.displayName} says you've hit a usage limit.", "Wait a minute and try again, or check your plan's limits.")
         e.httpCode == 404 -> ConnectResult.Failure("The service address wasn't found.", "For a custom service, check the address (it usually ends in /v1).")
-        e.httpCode == null -> ConnectResult.Failure("Couldn't reach ${preset.displayName}.", "Check your internet connection and try again.")
+        e.httpCode == null && (e.cause?.message ?: e.message ?: "").contains("plain HTTP") ->
+            ConnectResult.Failure("Android blocked the connection to ${preset.displayName}.", "Update Ciel (0.5+ allows plain HTTP on your own network).")
+        e.httpCode == null -> ConnectResult.Failure("Couldn't reach ${preset.displayName}.", e.message ?: "Check your internet connection and try again.")
         else -> ConnectResult.Failure("${preset.displayName} returned an error.", e.message ?: "Try again in a moment.")
+    }
+
+    /**
+     * Ollama: find the server, list installed models with the capabilities the server reports,
+     * pick fast / reasoning / vision models, test one, and configure tool use only where the
+     * model supports it (otherwise the server answers HTTP 400).
+     */
+    suspend fun connectOllama(address: String, connectionId: String, onStatus: (String) -> Unit = {}, client: OllamaClient = OllamaClient(transport)): ConnectResult {
+        if (address.isBlank()) return ConnectResult.Failure("Ollama's address is needed.", "Use \"Find Ollama\" or enter the PC's address, e.g. 192.168.1.10")
+        val host = client.normalise(address)
+        if (!InferenceLocation.plainHttpAllowed(host)) return ConnectResult.Failure("Refusing an unencrypted internet address.", "Use an address on your own network, or https:// with a secure proxy.")
+        onStatus("Looking for Ollama at $host…")
+        val version = client.version(host, 6000) ?: return ConnectResult.Failure("Ollama didn't answer at $host.",
+            "On the PC: make sure Ollama is running and listening on the network — set OLLAMA_HOST=0.0.0.0 and restart Ollama, allow port 11434 in the firewall, and keep the phone on the same Wi-Fi.")
+        onStatus("Ollama $version found. Reading installed models…")
+        val installed = try { client.models(host) } catch (e: Exception) {
+            if (e is kotlinx.coroutines.CancellationException) throw e
+            return ConnectResult.Failure("Ollama answered but its model list failed.", e.message ?: "")
+        }
+        if (installed.isEmpty()) return ConnectResult.Failure("No models are installed in Ollama.", "On the PC run, for example: ollama pull llama3.2  (≈2 GB) — then connect again.")
+        val described = installed.take(16).map { client.describe(host, it) }
+        val chat = described.filter { it.isChat }
+        if (chat.isEmpty()) return ConnectResult.Failure("Only embedding models are installed.", "Install a chat model, e.g. ollama pull llama3.2")
+        val bySize = chat.sortedBy { it.billions ?: 99.0 }
+        val loaded = client.loaded(host).toSet()
+        // Fast: a loaded model if there is one (no load delay), else the smallest; prefer tool support.
+        val fastPool = bySize.filter { it.tools }.ifEmpty { bySize }
+        val fast = fastPool.firstOrNull { it.name in loaded } ?: fastPool.first()
+        val strong = chat.filter { it.tools }.ifEmpty { chat }.maxByOrNull { it.billions ?: 0.0 }!!
+        val vision = chat.filter { it.vision }.maxByOrNull { it.billions ?: 0.0 }
+
+        val base = ProviderConfig(
+            id = "$connectionId:probe", displayName = "Ollama", protocol = ProtocolKind.OPENAI_CHAT_COMPLETIONS,
+            baseUrl = "$host/v1", model = fast.name, authStyle = AuthStyle.NONE, supportsStreaming = true, dataPolicyAcknowledged = true,
+            freeTier = FreeTier.FREE,
+        )
+        onStatus("Testing ${fast.name} (the first answer can take a minute while the model loads)…")
+        try {
+            factory(base.copy(supportsStreaming = false, supportsTools = false), null, transport)
+                .chat(ChatRequest(listOf(ChatMessage.user("Reply with one word: ready")), maxOutputTokens = 16))
+        } catch (e: Exception) {
+            if (e is kotlinx.coroutines.CancellationException) throw e
+            return ConnectResult.Failure("${fast.name} didn't answer a test message.", (e.message ?: "") +
+                " — the PC may need more memory for this model; try a smaller one (e.g. ollama pull llama3.2:1b).")
+        }
+        val where = InferenceLocation.of(host).label
+        fun cfg(role: String, m: OllamaModel, tier: CapabilityTier, label: String) = base.copy(
+            id = "$connectionId:$role", displayName = "Ollama · $label", model = m.name, tier = tier,
+            contextWindow = m.contextLength, supportsVision = m.vision, supportsTools = m.tools,
+        )
+        val configs = mutableListOf(cfg("fast", fast, if (strong.name == fast.name) CapabilityTier.STANDARD else CapabilityTier.ECONOMY, "fast"))
+        if (strong.name != fast.name) configs += cfg("strong", strong, CapabilityTier.ADVANCED, "reasoning")
+        if (vision != null && configs.none { it.supportsVision }) configs += cfg("vision", vision, CapabilityTier.STANDARD, "vision")
+        val details = mutableListOf("Runs $where ($host), Ollama $version", "Fast: ${fast.name} (${fast.sizeLabel})")
+        if (strong.name != fast.name) details += "Reasoning: ${strong.name} (${strong.sizeLabel})"
+        details += vision?.let { "Images: ${it.name}" } ?: "No image-capable model installed (e.g. ollama pull llava or gemma3)."
+        val noTools = configs.filter { !it.supportsTools }.map { it.model }
+        if (noTools.isNotEmpty()) details += "Without tool support (chat only, no skills): ${noTools.joinToString()}"
+        if (described.any { it.capabilities == null }) details += "This Ollama version doesn't report capabilities; tools were left off to be safe. Updating Ollama enables them."
+        return ConnectResult.Success(configs, "Connected to Ollama. Ciel is ready.", details)
     }
 }

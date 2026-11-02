@@ -30,7 +30,17 @@ data class GameActivity(
     val needsAttention: Boolean = false,
     val log: List<String> = emptyList(),
     val finalReport: String? = null,
+    /** Queue view: one line per task with its state. */
+    val queue: List<QueueItem> = emptyList(),
+    val nextAction: String? = null,
+    val usage: UsageStats = UsageStats(),
+    /** Last real tap sent to Android, as screen fractions, with its label (for the tap indicator). */
+    val lastTap: TapMark? = null,
 ) {
+    data class QueueItem(val label: String, val state: ItemState, val note: String? = null)
+    enum class ItemState(val symbol: String) { DONE("✓"), RUNNING("●"), WAITING("○"), SKIPPED("–"), BLOCKED("!") }
+    /** [exact]: the real touch point sent to Android; false: the targeted element's centre (Android clicked the element itself). */
+    data class TapMark(val fx: Float, val fy: Float, val label: String, val exact: Boolean = true, val at: Long = System.currentTimeMillis())
     enum class Status(val label: String) { RUNNING("Running"), WAITING("Waiting for you"), PAUSED("Paused"), FINISHED("Finished"), FAILED("Stopped") }
     val progressText: String get() = if (stepCount > 0) "${minOf(stepIndex + 1, stepCount)} of $stepCount steps" else ""
 }
@@ -137,9 +147,11 @@ class GamePlannerDecorator(
     private val readOnly: () -> Boolean,
 ) : ActionPlanner {
     private var loadingWaits = 0
+    private suspend fun propose(c: AgentContext, r: ScreenReading, attempt: Int) = proposeImpl(inner, session, c, r, attempt)
     private var retriedNetwork = false
 
     override suspend fun next(context: AgentContext): PlannerDecision {
+        if (session.skipTask) return session.skip("Skipped by you.")
         val reading = session.observe(context.screen)
         when (reading.state) {
             GameScreenState.LOADING -> {
@@ -168,7 +180,9 @@ class GamePlannerDecorator(
         var warnings = context.warnings + "Ciel's reading of this screen: ${reading.summary()}." + session.pendingNotes()
         if (readOnly()) warnings = warnings + "This step is READ-ONLY: open, read and go back only."
         repeat(3) { attempt ->
-            val decision = inner.next(context.copy(warnings = warnings, directives = context.directives))
+            val c = context.copy(warnings = warnings, directives = context.directives)
+            val decision = propose(c, reading, attempt) ?: return session.blocker(
+                "No AI model is available and Ciel doesn't know how to handle this screen yet (${reading.state.label}). Connect a model (Ollama works offline on your network) or run Explore & learn while online.")
             if (decision !is PlannerDecision.Act) return decision
             val target = ScreenAgent.targetLabel(decision.action, context.screen)
             var cls = session.gate.classify(decision.action, decision.rationale, context.screen, reading)
@@ -182,7 +196,7 @@ class GamePlannerDecorator(
                 return@repeat
             }
             when (val gate = session.gate.decide(cls, session.policy, target, session.channel.approvedTargets)) {
-                GateDecision.Allow -> { session.status(decision.action, target); return decision }
+                GateDecision.Allow -> { session.status(decision.action, target); session.tapped(decision.action, context.screen, target); return decision }
                 is GateDecision.Block -> warnings = warnings + "Not allowed: ${gate.reason} Choose a different action, or finish/fail this step."
                 is GateDecision.Clarify -> {
                     session.channel.ask(gate.question, gate.options, gate.consequence, target)
@@ -194,13 +208,30 @@ class GamePlannerDecorator(
                     session.waiting(true)
                     val ok = session.confirm(ConfirmationRequest(gate.title, gate.detail, Risk.CONSEQUENTIAL, decision.action.describe()))
                     session.waiting(false)
-                    if (ok) { target?.let { session.channel.answerApproved(it) }; return decision }
+                    if (ok) { target?.let { session.channel.answerApproved(it) }; session.tapped(decision.action, context.screen, target); return decision }
                     warnings = warnings + "The user declined: ${gate.title}. Do not do it."
                 }
             }
         }
         return PlannerDecision.Act(DeviceAction.Wait(1500), "No permitted action found; re-checking the screen.")
     }
+}
+
+/**
+ * Local first: routine decisions are made on the phone; the AI is asked only when the local rules
+ * cannot decide. If the AI is unreachable (credits, limits, offline), the session switches to
+ * local-only for the rest of the task and tells the user, instead of giving up.
+ */
+private suspend fun GamePlannerDecorator.proposeImpl(inner: ActionPlanner, session: GameSessionState, c: AgentContext, reading: ScreenReading, attempt: Int): PlannerDecision? {
+    if (attempt == 0) session.local.decide(c, reading)?.let { session.count(local = true); return it }
+    if (!session.stats.aiAvailable) return session.local.offline(c, reading)?.also { session.count(local = true) }
+    session.count(local = false)
+    val d = inner.next(c)
+    if (d is PlannerDecision.Fail && (d.reason.startsWith("The AI providers could not be reached") || d.reason.startsWith("No AI provider configured"))) {
+        session.aiUnavailable(d.reason)
+        return session.local.offline(c, reading)?.also { session.count(local = true) }
+    }
+    return d
 }
 
 private fun TaskChannel.answerApproved(target: String) { directive("Approved \"$target\".") }
@@ -226,6 +257,37 @@ class GameSessionState(
     var lastReading: ScreenReading? = null; private set
     var blockerReason: String? = null; private set
     var skipReason: String? = null
+    /** Set by "Skip task": the current task ends at the next decision. */
+    @Volatile var skipTask = false
+    var currentStep: GamePlanStep? = null
+    val local = LocalGamePlanner(this)
+    var stats = UsageStats(); private set
+    /** Events read from the game's screens during this session. */
+    val events = mutableListOf<EventInfo>()
+
+    fun count(local: Boolean) {
+        stats = if (local) stats.copy(localDecisions = stats.localDecisions + 1) else stats.copy(aiCalls = stats.aiCalls + 1)
+        activityFlow.update { it?.copy(usage = stats) }
+    }
+    fun aiUnavailable(reason: String) {
+        if (!stats.aiAvailable) return
+        stats = stats.copy(aiAvailable = false, aiFailures = stats.aiFailures + 1)
+        activityFlow.update { it?.copy(usage = stats) }
+        channel.say(false, "My AI model isn't available (${reason.take(120)}). I'm continuing with what I can do on the phone.")
+        addAttention("AI became unavailable during the task; continued locally where possible.")
+    }
+    fun tapped(action: DeviceAction, screen: ScreenSnapshot, target: String?) {
+        var exact = true
+        val p = when (action) {
+            is DeviceAction.TapRel -> action.fx to action.fy
+            is DeviceAction.TapAt -> if (screen.screenWidth > 0) action.x.toFloat() / screen.screenWidth to action.y.toFloat() / screen.screenHeight else null
+            is DeviceAction.ClickNode -> screen.nodes.firstOrNull { it.id == action.nodeId }?.takeIf { screen.screenWidth > 0 && !it.bounds.isEmpty }
+                ?.also { exact = it.className == dev.ciel.task.OCR_CLASS }
+                ?.let { it.bounds.centerX.toFloat() / screen.screenWidth to it.bounds.centerY.toFloat() / screen.screenHeight }
+            else -> null
+        } ?: return
+        activityFlow.update { it?.copy(lastTap = GameActivity.TapMark(p.first, p.second, target ?: action.describe(), exact)) }
+    }
     val attention = mutableListOf<String>()
     val log = mutableListOf<String>()
     private var learned = 0
@@ -233,11 +295,27 @@ class GameSessionState(
     fun observe(screen: ScreenSnapshot): ScreenReading = tracker.add(reader.read(screen)).also { r ->
         lastReading = r
         activityFlow.update { it?.copy(screen = r.state.label) }
-        r.timers.take(2).forEach { t -> addAttention("A timer is running on ${r.state.label.lowercase()}: $t (come back later)") }
+        r.timers.take(2).forEach { t -> if (r.state != GameScreenState.EVENT) addAttention("A timer is running on ${r.state.label.lowercase()}: $t (come back later)") }
+        if (r.state == GameScreenState.EVENT) captureEvent(screen, r)
+    }
+
+    /** Records an event's name and the remaining time exactly as the game shows it (never invented). */
+    private fun captureEvent(screen: ScreenSnapshot, r: ScreenReading) {
+        val timer = r.timers.firstOrNull() ?: return
+        val remaining = EventDeadlines.parseRemaining(timer) ?: return
+        val name = screen.nodes.filter { n -> val t = n.text ?: return@filter false
+            t.length in 4..40 && t.any(Char::isLetter) && EventDeadlines.parseRemaining(t) == null && !GameScreenReader.containsWord(t.lowercase(), "claim") }
+            .minByOrNull { it.bounds.top }?.text?.trim() ?: "Event"
+        val attempts = r.counters.firstOrNull()
+        val e = EventInfo(name, System.currentTimeMillis() + remaining, timer, dailyAttempts = attempts, claimable = r.has(ElementKind.CLAIM))
+        events.removeAll { it.name.equals(name, true) }
+        events += e
     }
 
     fun status(text: String) = activityFlow.update { it?.copy(currentAction = text, status = if (it.status == GameActivity.Status.WAITING) it.status else GameActivity.Status.RUNNING) }
     fun status(action: DeviceAction, target: String?) = status(target?.let { "Tapping \"$it\"" } ?: action.describe())
+    fun next(text: String?) = activityFlow.update { it?.copy(nextAction = text) }
+    fun queue(items: List<GameActivity.QueueItem>) = activityFlow.update { it?.copy(queue = items) }
     fun waiting(on: Boolean) = activityFlow.update { it?.copy(status = if (on) GameActivity.Status.WAITING else GameActivity.Status.RUNNING, needsAttention = on) }
     fun pendingNotes(): List<String> = channel.questions.value.map { "Waiting for the user's answer: ${it.question} — do not do that yet." }
     fun isForbiddenArea(target: String?) = target != null && forbiddenAreas.any { GameScreenReader.containsWord(target.lowercase(), it) }

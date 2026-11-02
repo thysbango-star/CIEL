@@ -159,6 +159,7 @@ private fun MainShell(onListen: () -> Unit) {
                 composable("memory") { ScreenFrame { MemoryScreen() } }
                 composable("permissions") { ScreenFrame { PermissionsScreen() } }
                 composable("games") { ScreenFrame { GamesScreen() } }
+                composable("gamedash/{pkg}") { entry -> ScreenFrame { dev.ciel.app.ui.screens.GameDashboard(entry.arguments?.getString("pkg") ?: "") } }
                 composable("skills") { ScreenFrame { SkillsScreen() } }
             }
             ConfirmationHost()

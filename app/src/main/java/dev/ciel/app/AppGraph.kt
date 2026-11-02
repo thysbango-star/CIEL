@@ -108,7 +108,14 @@ class AppGraph(val context: Context) {
         return ScreenAgent(guardedDevice, LlmActionPlanner(gateway) { settings.current.providers }, locks)
     }
 
-    val gameEngine = GameEngine(gameProfiles, AndroidInstalledPackages(context), { screenAgent() }, { settings.current.allowScreenshots }, confirmations).apply {
+    /**
+     * Game tasks only need screen control: with no AI connected (or credits exhausted) the game
+     * engine continues with its on-phone decisions and says what it cannot do.
+     */
+    private fun gameAgent(): ScreenAgent? =
+        if (!guardedDevice.isAvailable) null else ScreenAgent(guardedDevice, LlmActionPlanner(gateway) { settings.current.providers }, locks)
+
+    val gameEngine = GameEngine(gameProfiles, AndroidInstalledPackages(context), { gameAgent() }, { settings.current.allowScreenshots }, confirmations).apply {
         // Questions asked while a game task runs are answered by the fast model from live context;
         // the task keeps running (non-blocking communication).
         answerer = dev.ciel.game.TaskQuestionAnswerer { ctx, question ->

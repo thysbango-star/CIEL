@@ -59,6 +59,7 @@ object ActivityNotch {
     private var params: WindowManager.LayoutParams? = null
     private var wm: WindowManager? = null
     private var hideJob: Job? = null
+    private var lastTapAt = 0L
 
     /** Starts following the game engine's live activity. Call once (AppGraph). */
     @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
@@ -68,6 +69,7 @@ object ActivityNotch {
                 if (a == null) { hide(); return@collectLatest }
                 if (view == null) show(context.applicationContext)
                 view?.render(a)
+                a.lastTap?.let { t -> if (t.at != lastTapAt) { lastTapAt = t.at; TapIndicator.show(context.applicationContext, t) } }
                 hideJob?.cancel()
                 if (a.status == GameActivity.Status.FINISHED || a.status == GameActivity.Status.FAILED) {
                     // Leave the result visible for a moment, then get out of the way.
@@ -190,6 +192,9 @@ private class NotchView(context: Context, private val onNeedsKeyboard: (Boolean)
     private fun label(t: String) = TextView(context).apply { text = t; setTextColor(muted); textSize = 11f; letterSpacing = 0.08f; setPadding(0, (6 * dp).toInt(), 0, 0) }
     private fun value() = TextView(context).apply { setTextColor(textColor); textSize = 14f }
     private val taskValue = value(); private val actionValue = value(); private val progressValue = value(); private val statusValue = value()
+    private val nextValue = value()
+    private val queueValue = TextView(context).apply { setTextColor(textColor); textSize = 13f; setLineSpacing(0f, 1.15f) }
+    private val usageValue = TextView(context).apply { setTextColor(muted); textSize = 11f }
     private val questionBox = LinearLayout(context).apply { orientation = VERTICAL; visibility = GONE }
     private val chatList = LinearLayout(context).apply { orientation = VERTICAL }
     private val chatScroll = ScrollView(context).apply {
@@ -220,9 +225,12 @@ private class NotchView(context: Context, private val onNeedsKeyboard: (Boolean)
         addView(label("CURRENT TASK")); addView(taskValue)
         addView(label("CURRENT ACTION")); addView(actionValue)
         addView(label("PROGRESS")); addView(progressValue)
-        addView(label("STATUS")); addView(statusValue)
+        addView(label("NEXT")); addView(nextValue)
+        addView(label("QUEUE")); addView(queueValue)
+        addView(label("STATUS")); addView(statusValue); addView(usageValue)
         addView(questionBox)
-        addView(row(pauseBtn, small("Stop", Color.rgb(200, 40, 60)) { graph.emergencyStop.trigger("activity notch stop") }, small("Ask Ciel") { toggleAsk() }))
+        addView(row(pauseBtn, small("Skip task") { activity?.let { graph.gameEngine.skipCurrentTask(it.taskId) } }, small("Stop", Color.rgb(200, 40, 60)) { graph.emergencyStop.trigger("activity notch stop") }))
+        addView(row(small("Ask Ciel") { toggleAsk() }))
         addView(row(small("View task") { graph.navigate("tasks") }, small("Open Ciel") { graph.navigate("home") }, small("Hide") { graph.gameEngine.dismissActivity(); collapse() }))
         addView(askPanel)
     }
@@ -316,6 +324,10 @@ private class NotchView(context: Context, private val onNeedsKeyboard: (Boolean)
         actionValue.text = a.currentAction + (a.screen?.let { "\nScreen: $it" } ?: "")
         progressValue.text = "${a.progressText} — ${a.stepTitle}"
         statusValue.text = a.status.label
+        nextValue.text = a.nextAction ?: "—"
+        nextValue.visibility = if (a.nextAction != null) VISIBLE else GONE
+        queueValue.text = if (a.queue.isEmpty()) "—" else a.queue.joinToString("\n") { "${it.state.symbol} ${it.label}" + (it.note?.let { n -> " — $n" } ?: "") }
+        usageValue.text = "${a.usage.mode} · decided on the phone: ${a.usage.localDecisions} · by AI: ${a.usage.aiCalls}"
         pauseBtn.text = if (a.status == GameActivity.Status.PAUSED) "Resume" else "Pause"
         pauseBtn.isEnabled = a.status == GameActivity.Status.RUNNING || a.status == GameActivity.Status.WAITING || a.status == GameActivity.Status.PAUSED
     }
@@ -343,5 +355,53 @@ private class NotchView(context: Context, private val onNeedsKeyboard: (Boolean)
             })
         }
         chatScroll.post { chatScroll.fullScroll(View.FOCUS_DOWN) }
+    }
+}
+
+/**
+ * Shows where Ciel just touched: a ring that expands and fades at the exact point sent to Android
+ * (solid), or at the centre of the element she asked Android to click (dashed + "target").
+ * The layer is never touchable and is gone before the next screenshot is taken.
+ */
+@SuppressLint("ViewConstructor")
+private class TapMarkView(context: Context, private val mark: GameActivity.TapMark, private val accent: Int) : View(context) {
+    private val dp = resources.displayMetrics.density
+    private val ring = android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG).apply { style = android.graphics.Paint.Style.STROKE; strokeWidth = 3 * dp }
+    private val dot = android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG)
+    private val text = android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG).apply { textSize = 13 * dp; color = Color.WHITE; setShadowLayer(4 * dp, 0f, 0f, Color.BLACK) }
+    private val start = System.nanoTime()
+    override fun onDraw(canvas: android.graphics.Canvas) {
+        val t = ((System.nanoTime() - start) / 1e9 / 0.9).toFloat().coerceIn(0f, 1f)
+        val x = mark.fx * width; val y = mark.fy * height
+        val fade = 1f - t
+        ring.color = accent; ring.alpha = (255 * fade).toInt()
+        ring.pathEffect = if (mark.exact) null else android.graphics.DashPathEffect(floatArrayOf(6 * dp, 4 * dp), 0f)
+        canvas.drawCircle(x, y, (14 + 26 * t) * dp, ring)
+        if (mark.exact) { dot.color = accent; dot.alpha = (220 * fade).toInt(); canvas.drawCircle(x, y, 6 * dp, dot) }
+        text.alpha = (255 * fade).toInt()
+        val label = (if (mark.exact) "Tap: " else "Target: ") + mark.label.take(28)
+        val tx = (x + 22 * dp).coerceAtMost(width - text.measureText(label) - 8 * dp).coerceAtLeast(8 * dp)
+        canvas.drawText(label, tx, (y - 22 * dp).coerceAtLeast(24 * dp), text)
+        if (t < 1f) postInvalidateOnAnimation()
+    }
+}
+
+internal object TapIndicator {
+    private var current: View? = null
+    fun show(appContext: Context, mark: GameActivity.TapMark) {
+        val service = CielAccessibilityService.instance ?: return // needs the accessibility overlay layer
+        val wm = service.getSystemService(Context.WINDOW_SERVICE) as WindowManager
+        current?.let { runCatching { wm.removeView(it) } }
+        val accent = DesignPalette.resolve(CielApplication.graph.settings.current.appearance).accent
+        val v = TapMarkView(service, mark, accent)
+        val p = WindowManager.LayoutParams(
+            WindowManager.LayoutParams.MATCH_PARENT, WindowManager.LayoutParams.MATCH_PARENT,
+            WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY,
+            WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE or WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN or WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS,
+            PixelFormat.TRANSLUCENT,
+        ).apply { gravity = Gravity.TOP or Gravity.START }
+        if (runCatching { wm.addView(v, p) }.isFailure) return
+        current = v
+        v.postDelayed({ runCatching { wm.removeView(v) }; if (current === v) current = null }, 1000)
     }
 }

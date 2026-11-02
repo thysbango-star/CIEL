@@ -58,7 +58,7 @@ fun coreTests() = T.suite("core") {
             val lines = UrlConnectionTransport().streamLines(HttpRequest("http://127.0.0.1:${server.address.port}/sse", "GET")).toList()
             eq(listOf("data: one", "", "data: two", ""), lines)
         } finally { server.stop(0) }
-        throws<NetworkError.Offline> { kotlinx.coroutines.runBlocking { UrlConnectionTransport().execute(HttpRequest("http://127.0.0.1:1/x", "GET")) } }
+        throws<NetworkError.Unreachable> { kotlinx.coroutines.runBlocking { UrlConnectionTransport().execute(HttpRequest("http://127.0.0.1:1/x", "GET")) } }
     }
 }
 
