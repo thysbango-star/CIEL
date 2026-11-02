@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.5.0 — 2026-11-03
+
+### Fixed
+- **Crash when connecting to Ollama** (Android's plain-HTTP block and unclassified network errors). Plain HTTP is allowed only to your own network.
+- Ollama models without tool support no longer fail with HTTP 400 (capabilities read from Ollama).
+
+### Added
+- **Ollama**: find it on your Wi-Fi, installed models with capabilities, automatic fast/reasoning/vision choice, connection test that allows for model loading.
+- **NVIDIA** API catalog (nvapi- keys) and **self-hosted NIM**. Each connection shows where it runs (phone / your network / cloud).
+- **Local-first game play**: routine decisions on the phone; the AI only for unfamiliar screens; automatic local-only fallback when the AI fails; measured decision counts.
+- **Gameplay manager** (Settings → Games → Open gameplay manager): task library by category, queue with drag-and-drop, stop rules (once, runs, until stamina/daily attempts), presets, locked order, event-first ordering, event deadlines read from the game with warnings.
+- Activity notch: queue (✓ ● ○), next action, Skip task; live tap markers showing where Ciel touched.
+
+### Tests
+- 78 core tests (12 new: Ollama connect/discovery, crash regression, NVIDIA filtering, queue ordering, deadlines, local-only runs, stop rules).
+
 ## 0.4.0 — 2026-11-02
 
 ### Fixed

@@ -77,3 +77,21 @@ Voice goes to Ciel, never to the game: speech is handled by Ciel's recogniser an
 * The notch appears in screenshots; the model is told to ignore it and Ciel's taps pass through it.
 * Battles and anything requiring fast reactions are out of scope.
 * Game terms may forbid automation: review them before allowing a game.
+
+## v0.5: local-first play and the gameplay manager
+
+* **Local decisions** (`LocalGamePlanner`): reward/result screens, ordinary pop-ups, claim/collect
+  buttons, learned routes and menu names, going back to the main screen, stopping on "not enough
+  stamina" (never buying refills) and on defeats. The AI model is asked only when these rules
+  can't decide, and a local action that had no effect is handed to the AI.
+* **AI unavailable**: the session switches to local-only, says so once, and continues; read-only
+  inspections finish from the on-screen text.
+* **Gameplay manager** (`GameQueue`, `QueuePlanner`, `GameEngine.runQueue`): selected tasks run in
+  order with finite stop rules (max 50 runs). Unless the order is locked: events first, kingdom
+  collection before production, quest claiming after story/farming. After "Check active events"
+  the rest of the queue is re-ordered by the deadlines that were read.
+* **Events**: name and remaining time are taken from the event screen exactly as shown; the
+  dashboard counts down from that reading and says how old it is. One warning per event when
+  under 24 hours remain.
+* **Tap markers**: a solid ring is the exact point sent to Android; a dashed ring marks the centre
+  of an element Android was asked to click.

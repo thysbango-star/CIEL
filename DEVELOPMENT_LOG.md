@@ -1,5 +1,10 @@
 # Development log
 
+## Milestone 5 — 2026-11-03 (v0.5)
+- Ollama crash root cause: Android cleartext policy + unclassified IOException escaping the Connect coroutine. Fixed and regression-tested.
+- Local-first gameplay and the gameplay manager; see docs/GAME_INTELLIGENCE.md and docs/OLLAMA_AND_NVIDIA.md.
+- Not yet: on-phone vision/template matching beyond OCR, an on-phone language model, response caching for AI calls, per-objective dependency merging beyond queue ordering. Not tested on a device, with a real Ollama/NVIDIA account, or in the real game.
+
 ## Milestone 4 — 2026-11-02 (v0.4)
 - UI overhaul: root causes and fixes in docs/UI_GUIDELINES.md (double inset padding + fixed-size layouts behind the keyboard; preview `requiredSize` shift; fixed rows and dialog heights).
 - Animation: `MotionClock` integrates phases with eased speeds; verified numerically (2 h simulated with state changes every 7 s: max per-frame ring movement 2.5°, no jumps).
