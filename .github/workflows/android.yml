@@ -53,6 +53,44 @@ jobs:
           name: lint-report
           path: app/build/reports/lint-results-debug.html
 
+  windows:
+    name: Windows desktop app (real-Windows smoke test + installer)
+    runs-on: windows-latest
+    needs: core-tests
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-java@v5
+        with: { distribution: temurin, java-version: '17' }
+      - uses: gradle/actions/setup-gradle@v4
+      - name: Core tests on Windows
+        run: ./gradlew :testing:run --stacktrace
+      - name: Windows smoke test (real drives, processes, power plans, typeperf, health, downloads)
+        run: ./gradlew :testing:windowsSmoke --stacktrace
+      - name: Build the desktop app and installer
+        run: ./gradlew :desktop:createDistributable :desktop:packageMsi --stacktrace
+      - name: Collect files
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force out | Out-Null
+          Compress-Archive -Path desktop/build/compose/binaries/main/app/Ciel -DestinationPath out/ciel-windows-portable.zip
+          Copy-Item (Get-ChildItem desktop/build/compose/binaries/main/msi/*.msi | Select-Object -First 1).FullName out/ciel-windows.msi
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ciel-windows
+          path: out/*
+      - name: Publish as a direct download (release "desktop-latest")
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release delete desktop-latest --yes --cleanup-tag || true
+          gh release create desktop-latest out/ciel-windows.msi out/ciel-windows-portable.zip --prerelease \
+            --target "${{ github.sha }}" --title "Ciel for Windows (latest main)" \
+            --notes "Automatically built from ${{ github.sha }}. Install with ciel-windows.msi (per-user, no admin needed), or unzip ciel-windows-portable.zip and run Ciel.exe. Unsigned test build: Windows SmartScreen may ask you to confirm (More info → Run anyway)."
+
   release:
     name: Signed release APK
     runs-on: ubuntu-latest

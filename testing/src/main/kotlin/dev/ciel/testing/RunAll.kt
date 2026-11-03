@@ -16,6 +16,7 @@ fun main() {
     gameIntelligenceTests()
     localProviderTests()
     gameQueueTests()
+    windowsTests()
     val failed = T.runAll()
     exitProcess(if (failed == 0) 0 else 1)
 }

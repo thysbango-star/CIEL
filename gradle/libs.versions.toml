@@ -13,6 +13,7 @@ coreKtx = "1.15.0"
 vosk = "0.3.47"
 jna = "5.13.0"
 mlkitText = "16.0.1"
+composeMultiplatform = "1.7.3"
 
 [libraries]
 coroutines-core = { module = "org.jetbrains.kotlinx:kotlinx-coroutines-core", version.ref = "coroutines" }
@@ -37,6 +38,8 @@ room-compiler = { module = "androidx.room:room-compiler", version.ref = "room" }
 datastore-preferences = { module = "androidx.datastore:datastore-preferences", version.ref = "datastore" }
 vosk-android = { module = "com.alphacephei:vosk-android", version.ref = "vosk" }
 jna = { module = "net.java.dev.jna:jna", version.ref = "jna" }
+coroutines-swing = { module = "org.jetbrains.kotlinx:kotlinx-coroutines-swing", version.ref = "coroutines" }
+jna-platform = { module = "net.java.dev.jna:jna-platform", version.ref = "jna" }
 mlkit-text = { module = "com.google.mlkit:text-recognition", version.ref = "mlkitText" }
 
 [plugins]
@@ -45,3 +48,4 @@ kotlin-android = { id = "org.jetbrains.kotlin.android", version.ref = "kotlin" }
 kotlin-jvm = { id = "org.jetbrains.kotlin.jvm", version.ref = "kotlin" }
 kotlin-compose = { id = "org.jetbrains.kotlin.plugin.compose", version.ref = "kotlin" }
 ksp = { id = "com.google.devtools.ksp", version.ref = "ksp" }
+compose-multiplatform = { id = "org.jetbrains.compose", version.ref = "composeMultiplatform" }

@@ -8,7 +8,7 @@ OUT="${OUT:-$ROOT/build/verify}"
 rm -rf "$OUT"; mkdir -p "$OUT"
 LIB="$KOTLINC_HOME/lib"
 CP="$LIB/kotlinx-coroutines-core-jvm.jar"
-MODULES="core ai-providers task-engine skill-system memory-engine research-engine communication game-engine core-ai"
+MODULES="core ai-providers task-engine skill-system memory-engine research-engine communication game-engine core-ai windows-integration"
 SRC=""
 for m in $MODULES; do SRC="$SRC $ROOT/$m/src/main/kotlin"; done
 echo "Compiling main sources..."

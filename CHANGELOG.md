@@ -1,5 +1,12 @@
 # Changelog
 
+## Windows 1.0.0 — 2026-11-03
+- **Ciel for Windows** (new desktop app, see docs/WINDOWS.md): same persona, providers, memory and safety core as the phone.
+- Storage intelligence (drives, categories, largest files/folders, duplicates, scan history, exclusions) and permission-based clean-up (Low risk / Review / Protected, Recycle Bin, log).
+- Intelligent Gaming Mode: presets, game profiles, approvable plan, original state recorded and restored.
+- Live performance overlay, PC health, permission-based downloads (verify, never run), floating assistant, tray, autonomy levels, activity log.
+- CI: real-Windows smoke test and MSI/portable builds published to the "desktop-latest" release.
+
 ## 0.5.2 — 2026-11-03
 - **Internet access out of the box**: web search now works with no setup (built-in: DuckDuckGo instant answers + Wikipedia, both keyless public APIs). Full web search via an Ollama web-search key (ollama.com/settings/keys), Brave, Tavily or SearXNG. New "Internet & research" entry in Settings with a Test search button.
 - Shareable game run log (0.5.1).

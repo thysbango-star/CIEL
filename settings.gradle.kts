@@ -26,7 +26,10 @@ include(
     ":communication",
     ":game-engine",
     ":core-ai",
+    ":windows-integration",
     ":testing",
 )
 // Android application: UI, voice, accessibility, overlay, storage, platform bridges.
 include(":app")
+// Windows desktop application (Compose for Desktop): same Ciel core, plus the Windows PC skill.
+include(":desktop")

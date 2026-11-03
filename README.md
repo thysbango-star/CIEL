@@ -29,6 +29,8 @@ See **[DEVELOPMENT_LOG.md](DEVELOPMENT_LOG.md)** for exactly what was tested whe
 
 ## Quick start (v0.2)
 
+**Windows:** https://github.com/thysbango-star/CIEL/releases/download/desktop-latest/ciel-windows.msi — see [docs/WINDOWS.md](docs/WINDOWS.md).
+
 Download the latest APK: https://github.com/thysbango-star/CIEL/releases/download/debug-latest/ciel-debug.apk — on first launch Ciel walks you through choosing a design, connecting an AI (paste a key) and turning on **Hey Ciel**.
 
 ## Quick start (details)
