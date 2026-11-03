@@ -116,6 +116,8 @@ class AppGraph(val context: Context) {
         if (!guardedDevice.isAvailable) null else ScreenAgent(guardedDevice, LlmActionPlanner(gateway) { settings.current.providers }, locks)
 
     val gameEngine = GameEngine(gameProfiles, AndroidInstalledPackages(context), { gameAgent() }, { settings.current.allowScreenshots }, confirmations).apply {
+        // Each finished game run's log is kept on the phone so the user can share it for diagnosis.
+        runLogSink = { pkg, text -> runCatching { java.io.File(context.filesDir, "game-logs").apply { mkdirs() }.resolve("$pkg.txt").writeText(text) } }
         // Questions asked while a game task runs are answered by the fast model from live context;
         // the task keeps running (non-blocking communication).
         answerer = dev.ciel.game.TaskQuestionAnswerer { ctx, question ->

@@ -111,6 +111,8 @@ fun gameQueueTests() = T.suite("gameplay-manager") {
         }
         val agent = ScreenAgent(GuardedDevice(dev, stop, ConfirmationGate { false }) {}, ai, ResourceLocks())
         val engine = GameEngine(repo, pkgs, agentFactory = { agent })
+        var runLog: String? = null
+        engine.runLogSink = { _, text -> runLog = text }
         repo.save(engine.profileFor(GameCatalog.COOKIE_RUN_KINGDOM).copy(policy = AutomationPolicy.ALLOWED_SINGLE_PLAYER))
         val tasks = TaskManager(CoroutineScope(SupervisorJob() + Dispatchers.Default), stop)
         val q = GameQueue(listOf(QueueTask(id = "k", type = TaskType.KINGDOM_COLLECT)))
@@ -118,6 +120,8 @@ fun gameQueueTests() = T.suite("gameplay-manager") {
         val t = done(tasks, id)
         check("Queue complete" in t.report!!) { t.report!! }
         check("0 by the AI model" in t.report!!) { t.report!! }
+        val log = runLog ?: error("no run log")
+        check("SCREEN" in log && "DECIDED by phone" in log && "RESULT" in log && "Collect" in log) { log }
         eq(GameActivity.ItemState.DONE, engine.activity.value!!.queue.single().state)
     }
 

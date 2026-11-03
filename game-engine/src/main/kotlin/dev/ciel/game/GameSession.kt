@@ -197,8 +197,9 @@ class GamePlannerDecorator(
             }
             when (val gate = session.gate.decide(cls, session.policy, target, session.channel.approvedTargets)) {
                 GateDecision.Allow -> { session.status(decision.action, target); session.tapped(decision.action, context.screen, target); return decision }
-                is GateDecision.Block -> warnings = warnings + "Not allowed: ${gate.reason} Choose a different action, or finish/fail this step."
+                is GateDecision.Block -> { session.trace("RULES blocked \"${target ?: decision.action.describe()}\": ${gate.reason}"); warnings = warnings + "Not allowed: ${gate.reason} Choose a different action, or finish/fail this step." }
                 is GateDecision.Clarify -> {
+                    session.trace("RULES asked the user: ${gate.question}")
                     session.channel.ask(gate.question, gate.options, gate.consequence, target)
                     session.waiting(true)
                     warnings = warnings + "The user is being asked: \"${gate.question}\". Do NOT do that now. Continue with other parts of this step; if nothing else is possible, reply with wait."
@@ -223,10 +224,11 @@ class GamePlannerDecorator(
  * local-only for the rest of the task and tells the user, instead of giving up.
  */
 private suspend fun GamePlannerDecorator.proposeImpl(inner: ActionPlanner, session: GameSessionState, c: AgentContext, reading: ScreenReading, attempt: Int): PlannerDecision? {
-    if (attempt == 0) session.local.decide(c, reading)?.let { session.count(local = true); return it }
-    if (!session.stats.aiAvailable) return session.local.offline(c, reading)?.also { session.count(local = true) }
+    if (attempt == 0) session.local.decide(c, reading)?.let { session.count(local = true); session.traceDecision("phone", it); return it }
+    if (!session.stats.aiAvailable) return session.local.offline(c, reading)?.also { session.count(local = true); session.traceDecision("phone/offline", it) }
     session.count(local = false)
     val d = inner.next(c)
+    session.traceDecision("AI", d)
     if (d is PlannerDecision.Fail && (d.reason.startsWith("The AI providers could not be reached") || d.reason.startsWith("No AI provider configured"))) {
         session.aiUnavailable(d.reason)
         return session.local.offline(c, reading)?.also { session.count(local = true) }
@@ -265,6 +267,12 @@ class GameSessionState(
     /** Events read from the game's screens during this session. */
     val events = mutableListOf<EventInfo>()
 
+    fun traceDecision(who: String, d: PlannerDecision) = trace("DECIDED by $who: " + when (d) {
+        is PlannerDecision.Act -> "${d.action.describe()} — ${d.rationale.take(160)}" + (d.expectation?.let { " (expect: $it)" } ?: "")
+        is PlannerDecision.Complete -> "DONE — ${d.summary.take(200)} | evidence: ${d.evidence.take(160)}"
+        is PlannerDecision.Fail -> "FAIL — ${d.reason.take(200)}"
+    })
+
     fun count(local: Boolean) {
         stats = if (local) stats.copy(localDecisions = stats.localDecisions + 1) else stats.copy(aiCalls = stats.aiCalls + 1)
         activityFlow.update { it?.copy(usage = stats) }
@@ -290,10 +298,35 @@ class GameSessionState(
     }
     val attention = mutableListOf<String>()
     val log = mutableListOf<String>()
+
+    /**
+     * Run log the user can share: every screen Ciel read (state, confidence, text she saw), every
+     * decision (made on the phone or by the AI, with the reason) and what each action changed.
+     * Text that looks like account data is hidden. Capped in size.
+     */
+    val trace = StringBuilder()
+    private var lastTracedScreen: String? = null
+    private val started = System.currentTimeMillis()
+    fun trace(line: String) {
+        if (trace.length > 180_000) return
+        val t = (System.currentTimeMillis() - started) / 1000
+        trace.append("[%02d:%02d] ".format(t / 60, t % 60)).append(line).append('\n')
+    }
+    private fun traceScreen(screen: ScreenSnapshot, r: ScreenReading) {
+        val sig = screen.signature() + "|" + screen.visualHash
+        if (sig == lastTracedScreen) return
+        lastTracedScreen = sig
+        val texts = screen.nodes.mapNotNull { n -> (n.text ?: n.contentDescription)?.trim()?.takeIf { it.isNotEmpty() }?.let { t ->
+            val shown = if (SensitiveFilter.isSensitive(t)) "(hidden)" else t.take(40)
+            if (screen.screenWidth > 0 && !n.bounds.isEmpty) "$shown@${100 * n.bounds.centerX / screen.screenWidth},${100 * n.bounds.centerY / screen.screenHeight}" else shown
+        } }.take(40)
+        trace("SCREEN ${r.state.name} (${r.confidence.name.lowercase()}) evidence=${r.evidence.take(5)} image=${screen.screenshotBase64 != null} text=${if (texts.isEmpty()) "none" else texts.joinToString(" | ")}")
+    }
     private var learned = 0
 
     fun observe(screen: ScreenSnapshot): ScreenReading = tracker.add(reader.read(screen)).also { r ->
         lastReading = r
+        traceScreen(screen, r)
         activityFlow.update { it?.copy(screen = r.state.label) }
         r.timers.take(2).forEach { t -> if (r.state != GameScreenState.EVENT) addAttention("A timer is running on ${r.state.label.lowercase()}: $t (come back later)") }
         if (r.state == GameScreenState.EVENT) captureEvent(screen, r)
@@ -321,8 +354,8 @@ class GameSessionState(
     fun isForbiddenArea(target: String?) = target != null && forbiddenAreas.any { GameScreenReader.containsWord(target.lowercase(), it) }
     suspend fun confirm(r: ConfirmationRequest) = confirmGate.confirm(r)
 
-    fun blocker(reason: String): PlannerDecision { blockerReason = reason; addAttention(reason); return PlannerDecision.Fail(reason) }
-    fun skip(reason: String): PlannerDecision { skipReason = reason; return PlannerDecision.Fail(reason) }
+    fun blocker(reason: String): PlannerDecision { blockerReason = reason; addAttention(reason); trace("STOPPED $reason"); return PlannerDecision.Fail(reason) }
+    fun skip(reason: String): PlannerDecision { skipReason = reason; trace("SKIPPED $reason"); return PlannerDecision.Fail(reason) }
     fun addAttention(s: String) { if (s !in attention && attention.size < 12) attention += s }
 
     /**
@@ -339,6 +372,8 @@ class GameSessionState(
             else -> "screen changed"
         }
         log += "${e.target?.let { "Tap \"$it\"" } ?: e.action.describe()} on ${before.state.label} → ${after.state.label}; $verdict"
+        trace("RESULT ${e.action.describe()}${e.target?.let { " (\"$it\")" } ?: ""}: ${before.state.name} → ${after.state.name}; $verdict" +
+            (e.after.visualDistance(e.before)?.let { " image-diff=$it/64" } ?: ""))
         if (log.size > 60) log.removeAt(0)
         activityFlow.update { it?.copy(log = log.takeLast(6)) }
         val hint = (e.action as? DeviceAction.TapRel)?.let { it.fx to it.fy }

@@ -137,7 +137,36 @@ fun GameDashboard(pkg: String) {
             }
             TextButton(onClick = { saveQueue(q.copy(tasks = q.tasks + TaskType.values().filter { it != TaskType.FARM && it != TaskType.DISCOVER }.map { QueueTask(type = it) })) }) { Text("Add every activity") }
         }
+        RunLog(pkg)
         WhereAiRuns()
+    }
+}
+
+/** The last run's log: what Ciel read, decided and changed at each step — for sending to a developer. */
+@Composable
+private fun RunLog(pkg: String) {
+    val context = androidx.compose.ui.platform.LocalContext.current
+    val activity by CielApplication.graph.gameEngine.activity.collectAsStateWithLifecycle()
+    // Re-read when a run finishes.
+    val file = remember(activity?.finalReport) { java.io.File(context.filesDir, "game-logs/$pkg.txt").takeIf { it.exists() } }
+    CielPanel(title = "Last run log") {
+        if (file == null) { Text("After a run, its log appears here: every screen Ciel read, each decision (phone or AI) and what changed. Account-like text is hidden.", color = CielColors.Muted); return@CielPanel }
+        val text = remember(file) { runCatching { file.readText() }.getOrDefault("") }
+        Text("${text.lines().size} lines · ${java.text.DateFormat.getDateTimeInstance(java.text.DateFormat.SHORT, java.text.DateFormat.SHORT).format(java.util.Date(file.lastModified()))}",
+            color = CielColors.Muted, style = MaterialTheme.typography.bodyMedium)
+        Text(text.lines().take(6).joinToString("\n"), color = CielColors.Text, style = MaterialTheme.typography.labelSmall)
+        Row(horizontalArrangement = Arrangement.spacedBy(Spacing.s)) {
+            Button(onClick = {
+                val send = android.content.Intent(android.content.Intent.ACTION_SEND).setType("text/plain")
+                    .putExtra(android.content.Intent.EXTRA_SUBJECT, "Ciel game run log")
+                    .putExtra(android.content.Intent.EXTRA_TEXT, text.take(90_000))
+                context.startActivity(android.content.Intent.createChooser(send, "Share run log"))
+            }) { Text("Share log") }
+            OutlinedButton(onClick = {
+                val cm = context.getSystemService(android.content.ClipboardManager::class.java)
+                cm.setPrimaryClip(android.content.ClipData.newPlainText("Ciel run log", text.take(90_000)))
+            }) { Text("Copy") }
+        }
     }
 }
 

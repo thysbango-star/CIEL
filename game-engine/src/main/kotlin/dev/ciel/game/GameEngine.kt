@@ -173,6 +173,8 @@ class GameEngine(
     private val confirmations: ConfirmationGate = ConfirmationGate { false },
     /** Answers questions about a running task (AI model); null → answers from local state. */
     var answerer: TaskQuestionAnswerer? = null,
+    /** Receives each finished run's log (package, text) so the app can keep it for sharing. */
+    var runLogSink: (String, String) -> Unit = { _, _ -> },
 ) {
     private val _activity = MutableStateFlow<GameActivity?>(null)
     /** Live status for the activity notch: comes only from the running engine. */
@@ -254,6 +256,15 @@ class GameEngine(
         return run to null
     }
 
+    private fun runLog(r: Run): String = buildString {
+        append("Ciel game run log — ${r.profile.name} (version ${r.profile.versionName ?: "?"})\n")
+        append("Started: ${java.util.Date(System.currentTimeMillis())}\n")
+        append("Screen reading: text=${r.session.trace.contains("text=") } · ${r.session.stats.mode} · on the phone ${r.session.stats.localDecisions}, AI ${r.session.stats.aiCalls}\n")
+        r.session.blockerReason?.let { append("Stopped: $it\n") }
+        if (r.session.attention.isNotEmpty()) append("Needs attention: ${r.session.attention.joinToString(" / ")}\n")
+        append("\n").append(r.session.trace)
+    }
+
     /** Runs one plan step with the screen agent; local-first decisions, learning, live status. */
     private suspend fun runOneStep(r: Run, runStep: suspend (String, dev.ciel.task.AgentOptions) -> dev.ciel.task.AgentRun,
                                    step: GamePlanStep, budget: Int, context: String): StepResult {
@@ -261,6 +272,7 @@ class GameEngine(
         r.session.skipReason = null
         r.session.currentStep = step
         r.session.local.reset()
+        r.session.trace("STEP ${step.title} [${step.kind.name.lowercase()}${if (step.readOnly) ", read-only" else ""}] budget=$budget")
         val targets = mutableListOf<String>()
         val run = runStep("In ${r.profile.name}: ${step.objective}", dev.ciel.task.AgentOptions(
             maxSteps = budget, includeScreenshots = screenshotsAllowed(), settleDelayMs = 1500,
@@ -288,6 +300,7 @@ class GameEngine(
         profiles.save(extra(latest.copy(knowledge = r.session.knowledge, events = events, updatedAt = System.currentTimeMillis())))
         r.channel.clearQuestions()
         sessions.remove(handle.id)
+        runCatching { runLogSink(packageName, runLog(r)) }
     }
 
     /**
