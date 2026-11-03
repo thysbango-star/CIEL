@@ -100,7 +100,7 @@ fun windowsTests() = T.suite("windows") {
         fun cat(c: StorageCategory) = r.categories.first { it.category == c }.bytes
         eq(3_000_000L, cat(StorageCategory.DOWNLOADS)); eq(5_000_000L, cat(StorageCategory.VIDEOS)); eq(1_000_000L, cat(StorageCategory.TEMP))
         eq(2_000_000L, cat(StorageCategory.CACHE)); eq(4_000_000L, cat(StorageCategory.APPS)) // counted once: the link isn't followed
-        eq("clip.mp4", r.largestFiles.first().path.substringAfterLast('/'))
+        eq("clip.mp4", r.largestFiles.first().path.substringAfterLast('/').substringAfterLast('\\'))
         check(r.largestFolders.any { it.path.endsWith("Videos") && it.size == 5_000_000L }) { r.largestFolders.toString() }
         eq(15_100_000L, r.totalBytes)
     }

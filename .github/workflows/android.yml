@@ -67,8 +67,10 @@ jobs:
       - name: Core tests on Windows
         run: ./gradlew :testing:run --stacktrace
       - name: Windows smoke test (real drives, processes, power plans, typeperf, health, downloads)
+        if: always()
         run: ./gradlew :testing:windowsSmoke --stacktrace
       - name: Build the desktop app and installer
+        if: always()
         run: ./gradlew :desktop:createDistributable :desktop:packageMsi --stacktrace
       - name: Collect files
         shell: pwsh
