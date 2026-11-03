@@ -81,6 +81,7 @@ class KeyVault(context: Context) {
 
         fun providerKeyName(providerId: String) = "provider:$providerId"
         fun searchKeyName() = "search:key"
+        fun searchKeyName(kind: String) = "search:key:$kind"
         fun discordWebhookName(name: String) = "discord:$name"
     }
 }

@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.5.2 — 2026-11-03
+- **Internet access out of the box**: web search now works with no setup (built-in: DuckDuckGo instant answers + Wikipedia, both keyless public APIs). Full web search via an Ollama web-search key (ollama.com/settings/keys), Brave, Tavily or SearXNG. New "Internet & research" entry in Settings with a Test search button.
+- Shareable game run log (0.5.1).
+
 ## 0.5.0 — 2026-11-03
 
 ### Fixed

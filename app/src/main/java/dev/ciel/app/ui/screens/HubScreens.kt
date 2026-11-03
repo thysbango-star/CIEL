@@ -98,6 +98,7 @@ fun SettingsHub(nav: NavHostController) {
             HubRow("Skills", "Research, analysis, apps, messaging, games…") { nav.go("skills") }
             HubRow("Games", "Game profiles and automation permission") { nav.go("games") }
             HubRow("Permissions", "Microphone, notifications, floating window, screen control") { nav.go("permissions") }
+            HubRow("Internet & research", "Web search (works with no setup), page reading, search keys") { nav.go("preferences") }
             HubRow("Privacy & data", "History, keys, messaging, research, automation") { nav.go("preferences") }
             HubRow("System status", "Provider, model, network, voice, tasks") { nav.go("status") }
             HubRow("Developer", if (s.developerMode) "On — advanced provider settings visible" else "Off") { nav.go("developer") }

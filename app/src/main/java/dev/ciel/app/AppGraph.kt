@@ -170,7 +170,9 @@ class AppGraph(val context: Context) {
         register(CommunicationSkill(communication))
         register(ResearchSkill({
             val s = settings.current
-            s.searchKind?.let { kind -> runCatching { SearchProviders.create(SearchConfig(kind, vault.get(KeyVault.searchKeyName()), s.searchBaseUrl), http) }.getOrNull() }
+            // No choice made → built-in keyless search, so Ciel can always search the web.
+            val kind = s.searchKind ?: dev.ciel.research.SearchProviderKind.BUILT_IN
+            runCatching { SearchProviders.create(SearchConfig(kind, vault.get(KeyVault.searchKeyName(kind.name)) ?: vault.get(KeyVault.searchKeyName()), s.searchBaseUrl), http) }.getOrNull()
         }, PageFetcher(http)))
     }
     private val userSkillsDir = File(context.filesDir, "skills").apply { mkdirs() }

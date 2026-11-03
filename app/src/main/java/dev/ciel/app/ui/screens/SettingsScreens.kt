@@ -1,3 +1,4 @@
+@file:OptIn(androidx.compose.foundation.layout.ExperimentalLayoutApi::class)
 package dev.ciel.app.ui.screens
 
 import android.Manifest
@@ -51,6 +52,8 @@ import dev.ciel.app.voice.VoskModels
 import dev.ciel.app.voice.WakeWordService
 import dev.ciel.research.SearchProviderKind
 import kotlinx.coroutines.launch
+import dev.ciel.research.SearchProviders
+import dev.ciel.research.SearchConfig
 
 @Composable
 fun PreferencesScreen(nav: NavHostController) {
@@ -113,20 +116,41 @@ fun PreferencesScreen(nav: NavHostController) {
             }
         }
 
-        CielPanel(title = "Research") {
-            Text("Web search needs a search API. Brave and Tavily need a key from their websites; SearXNG needs your own instance with JSON output enabled.", color = CielColors.Muted)
-            Row { SearchProviderKind.values().forEach { k -> TextButton(onClick = { update { it.copy(searchKind = k) } }) { Text(k.label + if (s.searchKind == k) " ✓" else "") } } }
-            if (s.searchKind?.needsKey == true) {
-                var key by remember { mutableStateOf("") }
-                OutlinedTextField(key, { key = it.trim() }, label = { Text(if (graph.vault.has(KeyVault.searchKeyName())) "API key saved — enter to replace" else "Search API key") },
-                    singleLine = true, visualTransformation = PasswordVisualTransformation(), modifier = Modifier.fillMaxWidth())
-                TextButton(enabled = key.isNotBlank(), onClick = { graph.vault.put(KeyVault.searchKeyName(), key); key = "" }) { Text("Save key") }
+        CielPanel(title = "Internet & research") {
+            Text("Ciel can search the web and read pages. Built-in search works with no setup (Wikipedia + instant answers). " +
+                "For full web results, add a free Ollama web-search key — or Brave, Tavily, or your own SearXNG.", color = CielColors.Muted)
+            val current = s.searchKind ?: SearchProviderKind.BUILT_IN
+            androidx.compose.foundation.layout.FlowRow(horizontalArrangement = androidx.compose.foundation.layout.Arrangement.spacedBy(6.dp)) {
+                SearchProviderKind.values().forEach { k ->
+                    androidx.compose.material3.FilterChip(selected = current == k, onClick = { update { it.copy(searchKind = k) } }, label = { Text(k.label) })
+                }
             }
-            if (s.searchKind == SearchProviderKind.SEARXNG) {
+            if (current.needsKey) {
+                var key by remember(current) { mutableStateOf("") }
+                val saved = graph.vault.has(KeyVault.searchKeyName(current.name)) || graph.vault.has(KeyVault.searchKeyName())
+                current.keyUrl?.let { u -> TextButton(onClick = { context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(u))) }) { Text("Get a ${current.label} key ↗") } }
+                OutlinedTextField(key, { key = it.trim() }, label = { Text(if (saved) "Key saved — enter to replace" else "${current.label} key") },
+                    singleLine = true, visualTransformation = PasswordVisualTransformation(), modifier = Modifier.fillMaxWidth())
+                TextButton(enabled = key.isNotBlank(), onClick = { graph.vault.put(KeyVault.searchKeyName(current.name), key); key = "" }) { Text("Save key") }
+            }
+            if (current == SearchProviderKind.SEARXNG) {
                 var url by remember(s.searchBaseUrl) { mutableStateOf(s.searchBaseUrl ?: "") }
                 OutlinedTextField(url, { url = it.trim() }, label = { Text("SearXNG base URL") }, singleLine = true, modifier = Modifier.fillMaxWidth())
                 TextButton(onClick = { update { it.copy(searchBaseUrl = url) } }) { Text("Save URL") }
             }
+            var test by remember { mutableStateOf<String?>(null) }
+            val scope = androidx.compose.runtime.rememberCoroutineScope()
+            TextButton(onClick = {
+                test = "Searching…"
+                scope.launch {
+                    test = try {
+                        val p = SearchProviders.create(SearchConfig(current, graph.vault.get(KeyVault.searchKeyName(current.name)) ?: graph.vault.get(KeyVault.searchKeyName()), s.searchBaseUrl), graph.http)
+                        val hits = p.search("Cookie Run Kingdom", 3)
+                        if (hits.isEmpty()) "No results came back." else "✓ Working: " + hits.joinToString(" · ") { it.title.take(40) }
+                    } catch (e: kotlinx.coroutines.CancellationException) { throw e } catch (e: Exception) { "✗ ${e.message}" }
+                }
+            }) { Text("Test search") }
+            test?.let { Text(it, color = if (it.startsWith("✓")) CielColors.Green else CielColors.Muted, style = MaterialTheme.typography.bodyMedium) }
         }
 
         CielPanel(title = "Messaging") {

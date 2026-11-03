@@ -132,4 +132,24 @@ fun localProviderTests() = T.suite("local-providers") {
         eq("meta/llama-3.1-8b-instruct", plan.fastCandidates.first().id)
         eq("meta/llama-3.2-11b-vision-instruct", plan.visionCandidates.first().id)
     }
+
+    T.test("internet: built-in search works with no key (instant answer + Wikipedia); Ollama web search maps results and key errors") {
+        val fake = FakeTransport { r ->
+            when {
+                "duckduckgo" in r.url -> HttpResponse(200, """{"Heading":"Cookie Run: Kingdom","AbstractText":"A 2021 mobile game by Devsisters.","AbstractURL":"https://en.wikipedia.org/wiki/Cookie_Run:_Kingdom","RelatedTopics":[]}""")
+                "wikipedia" in r.url -> HttpResponse(200, """{"query":{"search":[{"title":"Cookie Run: Kingdom","snippet":"<span>Cookie</span> Run"},{"title":"Devsisters","snippet":"Korean company"}]}}""")
+                else -> HttpResponse(404, "")
+            }
+        }
+        val hits = dev.ciel.research.BuiltInSearch(fake).search("cookie run kingdom", 5)
+        eq("Cookie Run: Kingdom", hits.first().title); check(hits.any { "Devsisters" in it.title }) { hits.toString() }
+        eq(hits.size, hits.distinctBy { it.url }.size) // the abstract and Wikipedia hit for the same page aren't duplicated
+        check(fake.requests.all { r -> r.headers["User-Agent"]?.contains("Ciel") == true })
+        val ok = FakeTransport { HttpResponse(200, """{"results":[{"title":"News","url":"https://example.com/a","content":"Text"}]}""") }
+        eq("https://example.com/a", dev.ciel.research.OllamaWebSearch("k", ok).search("x", 3).single().url)
+        eq("Bearer k", ok.requests.single().headers["Authorization"])
+        val bad = FakeTransport { HttpResponse(401, "") }
+        val e = throws<dev.ciel.research.SearchException> { kotlinx.coroutines.runBlocking { dev.ciel.research.OllamaWebSearch("k", bad).search("x", 3) } }
+        check("ollama.com/settings/keys" in e.message!!)
+    }
 }

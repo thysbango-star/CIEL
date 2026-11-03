@@ -19,9 +19,13 @@ import java.net.URLEncoder
 
 data class SearchHit(val title: String, val url: String, val snippet: String)
 
-enum class SearchProviderKind(val label: String, val needsKey: Boolean) {
-    BRAVE("Brave Search API", true),
-    TAVILY("Tavily", true),
+enum class SearchProviderKind(val label: String, val needsKey: Boolean, val keyUrl: String? = null) {
+    /** Works with no setup: Wikipedia search + DuckDuckGo instant answers (both public, keyless APIs). */
+    BUILT_IN("Built-in (no key)", false),
+    /** Full web search through an ollama.com account (free tier available). */
+    OLLAMA("Ollama web search", true, "https://ollama.com/settings/keys"),
+    BRAVE("Brave Search API", true, "https://brave.com/search/api/"),
+    TAVILY("Tavily", true, "https://app.tavily.com"),
     SEARXNG("SearXNG (self-hosted)", false),
 }
 
@@ -32,6 +36,52 @@ interface SearchProvider {
 }
 
 class SearchException(message: String) : Exception(message)
+
+private const val UA = "CielAssistant/0.6 (Android personal assistant; https://github.com/thysbango-star/CIEL)"
+
+/**
+ * Keyless search: DuckDuckGo's Instant Answer API (a direct answer/summary when one exists) plus
+ * Wikipedia's search API. Not a full web index — for that, use Ollama, Brave, Tavily or SearXNG.
+ */
+class BuiltInSearch(private val http: HttpTransport) : SearchProvider {
+    override suspend fun search(query: String, count: Int): List<SearchHit> {
+        val out = mutableListOf<SearchHit>()
+        runCatching {
+            val r = http.execute(HttpRequest("https://api.duckduckgo.com/?q=${enc(query)}&format=json&no_html=1&skip_disambig=1&t=ciel", "GET", mapOf("User-Agent" to UA, "Accept" to "application/json"), timeoutMillis = 15_000))
+            if (r.isSuccess) Json.parseOrNull(r.body)?.let { o ->
+                val abstract = o["AbstractText"]?.string.orEmpty()
+                val url = o["AbstractURL"]?.string.orEmpty()
+                if (abstract.isNotBlank() && url.isNotBlank()) out += SearchHit(o["Heading"]?.string ?: query, url, abstract.take(600))
+                o["Answer"]?.string?.takeIf { it.isNotBlank() }?.let { out += SearchHit("Instant answer", "https://duckduckgo.com/?q=${enc(query)}", it) }
+                o["RelatedTopics"]?.array.orEmpty().take(3).forEach { t ->
+                    val text = t["Text"]?.string; val u = t["FirstURL"]?.string
+                    if (!text.isNullOrBlank() && !u.isNullOrBlank()) out += SearchHit(text.substringBefore(" - ").take(80), u, text.take(300))
+                }
+            }
+        }
+        val r = http.execute(HttpRequest("https://en.wikipedia.org/w/api.php?action=query&list=search&format=json&utf8=1&srlimit=${count.coerceIn(1, 10)}&srsearch=${enc(query)}",
+            "GET", mapOf("User-Agent" to UA, "Accept" to "application/json"), timeoutMillis = 15_000))
+        if (!r.isSuccess && out.isEmpty()) throw SearchException("Built-in search failed (HTTP ${r.code}).")
+        if (r.isSuccess) Json.parseOrNull(r.body)?.get("query")?.get("search")?.array.orEmpty().forEach { h ->
+            val title = h["title"]?.string ?: return@forEach
+            out += SearchHit("$title — Wikipedia", "https://en.wikipedia.org/wiki/" + enc(title.replace(' ', '_')).replace("%2F", "/"), stripTags(h["snippet"]?.string ?: ""))
+        }
+        return out.distinctBy { it.url }.take(count)
+    }
+}
+
+/** Ollama's web search API: POST https://ollama.com/api/web_search with an ollama.com API key. */
+class OllamaWebSearch(private val key: String, private val http: HttpTransport) : SearchProvider {
+    override suspend fun search(query: String, count: Int): List<SearchHit> {
+        val body = json { "query" to query; "max_results" to count.coerceIn(1, 10) }
+        val r = http.execute(HttpRequest("https://ollama.com/api/web_search", "POST", mapOf("Authorization" to "Bearer $key", "Content-Type" to "application/json"), body.toString(), 30_000))
+        if (r.code == 401 || r.code == 403) throw SearchException("Ollama rejected the web-search key. Create one at ollama.com/settings/keys.")
+        if (!r.isSuccess) throw SearchException("Ollama web search failed (HTTP ${r.code}).")
+        return Json.parse(r.body)["results"]?.array.orEmpty().mapNotNull {
+            SearchHit(it["title"]?.string ?: "", it["url"]?.string ?: return@mapNotNull null, (it["content"]?.string ?: "").take(500))
+        }
+    }
+}
 
 /** Brave Search API: GET https://api.search.brave.com/res/v1/web/search, header X-Subscription-Token. */
 class BraveSearch(private val key: String, private val http: HttpTransport) : SearchProvider {
@@ -70,6 +120,8 @@ class SearxngSearch(private val baseUrl: String, private val http: HttpTransport
 
 object SearchProviders {
     fun create(c: SearchConfig, http: HttpTransport): SearchProvider = when (c.kind) {
+        SearchProviderKind.BUILT_IN -> BuiltInSearch(http)
+        SearchProviderKind.OLLAMA -> OllamaWebSearch(c.apiKey ?: throw SearchException("Ollama web search needs an ollama.com API key."), http)
         SearchProviderKind.BRAVE -> BraveSearch(c.apiKey ?: throw SearchException("Brave needs an API key."), http)
         SearchProviderKind.TAVILY -> TavilySearch(c.apiKey ?: throw SearchException("Tavily needs an API key."), http)
         SearchProviderKind.SEARXNG -> SearxngSearch(c.baseUrl ?: throw SearchException("SearXNG needs a base URL."), http)
@@ -80,6 +132,7 @@ data class FetchedPage(val url: String, val finalStatus: Int, val title: String?
 
 /** Downloads a page and extracts readable text. Records the real status — never pretends. */
 class PageFetcher(private val http: HttpTransport) {
+    val transport: HttpTransport get() = http
     suspend fun fetch(url: String, maxChars: Int = 12_000): FetchedPage {
         val uri = runCatching { URI(url) }.getOrNull()
         if (uri == null || uri.scheme !in setOf("http", "https") || uri.host.isNullOrBlank()) throw SearchException("Not a valid web address: $url")
@@ -165,9 +218,10 @@ class ResearchSkill(
         if (!ctx.isOnline()) return ToolOutcome.fail("Offline: research needs an internet connection.")
         return when (tool) {
             "web_search" -> {
-                val provider = providerFactory() ?: return ToolOutcome.fail("No search provider configured. Add a Brave, Tavily or SearXNG key in Settings → Research.")
+                val provider = providerFactory() ?: BuiltInSearch(fetcher.transport)
                 val hits = try { provider.search(args.reqStr("query"), (args.int("count") ?: 6).coerceIn(1, 10)) } catch (e: SearchException) { return ToolOutcome.fail(e.message ?: "Search failed") }
                 catch (e: NetworkError) { return ToolOutcome.fail("Search failed: ${e.message}") }
+                catch (e: Exception) { if (e is kotlinx.coroutines.CancellationException) throw e; return ToolOutcome.fail("Search failed: ${e.message}") }
                 if (hits.isEmpty()) ToolOutcome.ok("No results.", true)
                 else ToolOutcome.external(hits.mapIndexed { i, h ->
                     val a = SourceAssessor.assess(h.url)
