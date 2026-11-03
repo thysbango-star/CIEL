@@ -70,11 +70,18 @@ fun main() = runBlocking {
         check((p.low + p.review).none { windir != null && it.path.lowercase().startsWith(windir) && !it.path.lowercase().contains("temp") }, "Windows folder in plan")
         "low ${human(p.lowBytes)}, review ${human(p.reviewBytes)}, protected ${p.protected.size}"
     }
-    step("cleanup deletes only Ciel's own old temp file") {
-        val f = File(work, "old.tmp").apply { writeText("x".repeat(1000)); setLastModified(System.currentTimeMillis() - 3 * 86_400_000L) }
-        val rec = pc.executor.execute(listOf(CleanupCandidate(f.absolutePath, f.length(), "smoke", CleanupRisk.LOW, CleanupMethod.DELETE)))
-        check(rec.single().ok && !f.exists(), "record=$rec exists=${f.exists()}")
-        "deleted, logged"
+    step("temp clean-up removes old files only, inside TEMP only") {
+        val dir = File(work, "oldcache").apply { mkdirs() }
+        val old = File(dir, "old.tmp").apply { writeText("x".repeat(1000)); setLastModified(System.currentTimeMillis() - 3 * 86_400_000L) }
+        val fresh = File(dir, "fresh.tmp").apply { writeText("y") }
+        val rec = pc.executor.execute(listOf(CleanupCandidate(dir.absolutePath, 1001, "smoke", CleanupRisk.LOW, CleanupMethod.DELETE, isFolder = true)))
+        check(rec.single().ok && !old.exists() && fresh.exists(), "record=$rec old=${old.exists()} fresh=${fresh.exists()}")
+        val docs = File(loc.documents.toFile(), "ciel-smoke-${System.nanoTime()}").apply { mkdirs() }
+        val keep = File(docs, "keep.txt").apply { writeText("z"); setLastModified(System.currentTimeMillis() - 3 * 86_400_000L) }
+        val refused = pc.executor.execute(listOf(CleanupCandidate(docs.absolutePath, 1, "smoke", CleanupRisk.LOW, CleanupMethod.DELETE, isFolder = true)))
+        val kept = keep.exists(); docs.deleteRecursively()
+        check(!refused.single().ok && kept, "Documents folder was not protected: $refused")
+        "old file deleted, recent kept, Documents refused"
     }
     step("processes + classification") {
         val ps = sys.processes()

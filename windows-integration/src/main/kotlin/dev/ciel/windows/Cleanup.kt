@@ -181,7 +181,8 @@ class CleanupExecutor(
     }
 
     /** Deletes files older than a day that aren't in use, inside a temp/cache folder only. */
-    private fun emptyDisposableFolder(dir: Path): CleanupRecord {
+    private fun emptyDisposableFolder(given: Path): CleanupRecord {
+        val dir = runCatching { given.toRealPath() }.getOrDefault(given)
         val cat = Categorizer(loc)
         val disposable = loc.tempDirs.any { dir.startsWith(it) } || cat.isCache(dir.resolve("x"))
         if (!disposable || policy.protectionReason(dir.resolve("x")) != null) return CleanupRecord(now(), dir.toString(), 0, CleanupMethod.DELETE, false, "Not a temporary/cache folder — refused")

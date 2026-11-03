@@ -60,7 +60,8 @@ data class KnownLocations(
 
     companion object {
         fun fromEnvironment(env: Map<String, String> = System.getenv()): KnownLocations {
-            fun p(k: String) = env[k]?.takeIf { it.isNotBlank() }?.let { Paths.get(it) }
+            // Real (long) names: Windows often reports TEMP as C:\Users\RUNNER~1\…, while files are found under the long name.
+            fun p(k: String) = env[k]?.takeIf { it.isNotBlank() }?.let { Paths.get(it) }?.let { runCatching { it.toRealPath() }.getOrDefault(it) }
             val home = p("USERPROFILE") ?: Paths.get(System.getProperty("user.home"))
             return KnownLocations(
                 home = home,
