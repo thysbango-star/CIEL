@@ -184,7 +184,8 @@ class CleanupExecutor(
     private fun emptyDisposableFolder(given: Path): CleanupRecord {
         val dir = runCatching { given.toRealPath() }.getOrDefault(given)
         val cat = Categorizer(loc)
-        val disposable = loc.tempDirs.any { dir.startsWith(it) } || cat.isCache(dir.resolve("x"))
+        fun real(x: Path) = runCatching { x.toRealPath() }.getOrDefault(x)
+        val disposable = loc.tempDirs.any { dir.startsWith(it) || dir.startsWith(real(it)) || given.startsWith(it) } || cat.isCache(dir.resolve("x"))
         if (!disposable || policy.protectionReason(dir.resolve("x")) != null) return CleanupRecord(now(), dir.toString(), 0, CleanupMethod.DELETE, false, "Not a temporary/cache folder — refused")
         if (!Files.isDirectory(dir)) return CleanupRecord(now(), dir.toString(), 0, CleanupMethod.DELETE, false, "No longer there")
         var freed = 0L; var skipped = 0
